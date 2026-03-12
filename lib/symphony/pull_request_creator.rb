@@ -11,8 +11,12 @@ module Symphony
     end
 
     def create_for(issue:, workspace_path:)
+      unless git_repository?(workspace_path)
+        return Result.new(success: false, error: "Workspace is not a git repository")
+      end
+
       if @repo.blank?
-        return Result.new(success: true, url: nil)
+        return Result.new(success: false, error: "GitHub repo is not configured")
       end
 
       branch = issue.branch_name.presence || "symphony/#{issue.identifier.downcase}"
@@ -23,7 +27,7 @@ module Symphony
       with_workspace_git(workspace_path, "add -A")
 
       unless working_tree_dirty?(workspace_path)
-        return Result.new(success: true, url: nil)
+        return Result.new(success: false, error: "No changes produced in workspace")
       end
 
       with_workspace_git(workspace_path, "commit -m #{Shellwords.escape(title)}")
@@ -39,12 +43,24 @@ module Symphony
       ].join(" ")
 
       output = run_command!(workspace_path, cmd)
-      Result.new(success: true, url: output.lines.last&.strip.presence)
+      url = output.lines.last&.strip.presence
+
+      if url.present?
+        Result.new(success: true, url: url)
+      else
+        Result.new(success: false, error: "GitHub PR creation did not return a URL")
+      end
     rescue => error
       Result.new(success: false, error: error.message)
     end
 
     private
+      def git_repository?(workspace_path)
+        git_directory = Pathname(workspace_path).join(".git")
+
+        git_directory.exist?
+      end
+
       def working_tree_dirty?(workspace_path)
         status = run_command!(workspace_path, "git status --porcelain")
         status.present?

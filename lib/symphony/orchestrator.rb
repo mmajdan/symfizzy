@@ -42,6 +42,7 @@ module Symphony
         return if @claimed.include?(issue.id)
 
         @claimed.add(issue.id)
+        @tracker_client.transition_to_in_progress(issue.id)
 
         workspace = @workspace_manager.create_for_issue(issue.identifier)
         prompt = PromptRenderer.new.render(
@@ -67,6 +68,7 @@ module Symphony
         pull_request = @pull_request_creator.create_for(issue: issue, workspace_path: workspace_path)
 
         if pull_request.success
+          @tracker_client.add_comment(issue.id, body: "GitHub PR: #{pull_request.url}")
           @tracker_client.transition_to_review(issue.id)
           @logger.info("Symphony finished #{issue.identifier}#{" with PR #{pull_request.url}" if pull_request.url.present?}")
         else

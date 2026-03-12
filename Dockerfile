@@ -9,16 +9,26 @@
 
 # Make sure RUBY_VERSION matches the Ruby version in .ruby-version
 ARG RUBY_VERSION=3.4.7
+ARG NODE_VERSION=25.2.1
+ARG CODEX_VERSION=0.114.0
 FROM docker.io/library/ruby:$RUBY_VERSION-slim AS base
+FROM docker.io/library/node:$NODE_VERSION-slim AS node_runtime
+
+FROM base AS runtime_base
 
 # Rails app lives here
 WORKDIR /rails
 
 # Install base packages
 RUN apt-get update -qq && \
-    apt-get install --no-install-recommends -y curl libjemalloc2 libvips sqlite3 libssl-dev && \
+    apt-get install --no-install-recommends -y curl gh git libjemalloc2 libssl-dev libvips sqlite3 && \
     ln -s /usr/lib/$(uname -m)-linux-gnu/libjemalloc.so.2 /usr/local/lib/libjemalloc.so && \
     rm -rf /var/lib/apt/lists /var/cache/apt/archives
+
+COPY --from=node_runtime /usr/local/ /usr/local/
+
+RUN npm install -g @openai/codex@$CODEX_VERSION && \
+    npm cache clean --force
 
 # Set production environment variables and enable jemalloc for reduced memory usage and latency.
 ENV RAILS_ENV="production" \
@@ -28,7 +38,7 @@ ENV RAILS_ENV="production" \
     LD_PRELOAD="/usr/local/lib/libjemalloc.so"
 
 # Throw-away build stage to reduce size of final image
-FROM base AS build
+FROM runtime_base AS build
 
 # Install packages needed to build gems
 RUN apt-get update -qq && \
@@ -57,7 +67,7 @@ RUN SECRET_KEY_BASE_DUMMY=1 ./bin/rails assets:precompile
 
 
 # Final stage for app image
-FROM base
+FROM runtime_base
 
 # Image metadata
 ARG OCI_DESCRIPTION

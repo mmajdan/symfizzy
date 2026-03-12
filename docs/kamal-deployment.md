@@ -53,6 +53,8 @@ VAPID_PUBLIC_KEY=something
 VAPID_PRIVATE_KEY=somethingelse
 SMTP_USERNAME=email-provider-username
 SMTP_PASSWORD=email-provider-password
+GH_TOKEN=github-token-with-repo-access
+OPENAI_API_KEY=openai-api-key
 ```
 
 The values you enter here will be specific to you, and you can get or create them as follows:
@@ -60,6 +62,8 @@ The values you enter here will be specific to you, and you can get or create the
 - `SECRET_KEY_BASE` should be a long, random secret. You can run `bin/rails secret` to create a suitable value for this.
 - `SMTP_USERNAME` & `SMTP_PASSWORD` should be valid credentials for your SMTP server. If you're using a 3rd-party service here, consult their documentation for what to use.
 - `VAPID_PUBLIC_KEY` & `VAPID_PRIVATE_KEY` are a pair of credentials that are used for sending notifications. You can create your own keys by starting a development console with:
+- `GH_TOKEN` must allow `gh pr create` for the GitHub repo Symphony will target.
+- `OPENAI_API_KEY` is required for the Codex CLI that Symphony runs inside the deployed container.
 
   ```sh
   bin/rails c
@@ -92,6 +96,33 @@ After the first deploy is done, any subsequent steps won't need to do that initi
 bin/kamal deploy
 ```
 
+### Running Symphony in production
+
+The starter Kamal config now includes a dedicated `symphony` role that runs:
+
+```sh
+bin/rails "symphony:run[WORKFLOW.md,false]"
+```
+
+That role uses the same application image as the web role, but the image now includes the extra runtime dependencies Symphony needs in production:
+
+- `git`
+- `gh`
+- Node.js
+- the Codex CLI
+
+Before deploying with Symphony enabled, set these values in `config/deploy.yml`:
+
+- `env/clear/GITHUB_REPO`: the GitHub repository Symphony should open PRs against
+- `env/clear/FIZZY_ACCOUNT_ID`: the Fizzy account Symphony should watch
+
+The deploy config also mounts a persistent volume at `/rails/tmp/symphony_workspaces` so issue workspaces survive container replacement.
+
+Useful Kamal aliases:
+
+- `bin/kamal symphony_logs`
+- `bin/kamal symphony_shell`
+
 ### Configuring file storage (Active Storage)
 
 Production uses the local disk service by default. To use any other service defined in `config/storage.yml`, set `ACTIVE_STORAGE_SERVICE`.
@@ -111,4 +142,3 @@ Optional for S3-compatible endpoints:
 - `S3_FORCE_PATH_STYLE=true`
 - `S3_REQUEST_CHECKSUM_CALCULATION` (defaults to `when_supported`)
 - `S3_RESPONSE_CHECKSUM_VALIDATION` (defaults to `when_supported`)
-

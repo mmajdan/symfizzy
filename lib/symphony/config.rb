@@ -5,8 +5,8 @@ module Symphony
     DEFAULTS = {
       "tracker" => {
         "kind" => "fizzy",
-        "active_states" => [ "active", "review", "merging" ],
-        "terminal_states" => [ "closed", "not_now" ]
+        "active_states" => [ "active" ],
+        "terminal_states" => [ "closed", "not_now", "done" ]
       },
       "polling" => {
         "interval_ms" => 30_000
@@ -20,7 +20,7 @@ module Symphony
         "max_turns" => 20
       },
       "codex" => {
-        "command" => "codex app-server"
+        "command" => "codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check -"
       },
       "github" => {
         "repo" => nil,
@@ -39,7 +39,7 @@ module Symphony
     end
 
     def tracker_account_id
-      resolve_env(value_for("tracker", "account_id"))
+      resolve_env(value_for("tracker", "account_id", optional: true))
     end
 
     def tracker_board_ids
@@ -102,6 +102,10 @@ module Symphony
 
       if codex_command.blank?
         raise ConfigurationError, "codex.command is required"
+      end
+
+      if codex_command.match?(/\bcodex\s+app-server\b/)
+        raise ConfigurationError, "codex.command must run a task executor, not `codex app-server`"
       end
 
       true

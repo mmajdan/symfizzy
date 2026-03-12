@@ -6,6 +6,8 @@ module Symphony
       ACTIVE_STATE = "active".freeze
       CLOSED_STATE = "closed".freeze
       NOT_NOW_STATE = "not_now".freeze
+      DONE_STATE = "done".freeze
+      IN_PROGRESS_COLUMN_NAME = "In Progress".freeze
 
       def initialize(account_id:, board_ids: nil, active_states:, terminal_states:)
         @account = Account.find_by!(external_account_id: account_id)
@@ -53,6 +55,29 @@ module Symphony
         end
       end
 
+      def transition_to_in_progress(issue_id)
+        card = scoped_cards.find(issue_id)
+        in_progress_column = card.board.columns.find_or_create_by!(name: IN_PROGRESS_COLUMN_NAME) do |column|
+          column.color = "var(--color-card-2)"
+          column.position = card.board.columns.maximum(:position).to_i + 1
+          column.account = @account
+        end
+
+        return if card.column == in_progress_column
+
+        Current.set(account: @account, user: @account.system_user) do
+          card.triage_into(in_progress_column)
+        end
+      end
+
+      def add_comment(issue_id, body:)
+        card = scoped_cards.find(issue_id)
+
+        Current.set(account: @account, user: @account.system_user) do
+          card.comments.create!(body: body)
+        end
+      end
+
       private
         def scoped_cards
           relation = @account.cards
@@ -61,7 +86,7 @@ module Symphony
         end
 
         def to_issue(card)
-          Issue.new(
+          Symphony::Issue.new(
             id: card.id,
             identifier: "CARD-#{card.number}",
             title: card.title,
@@ -70,7 +95,7 @@ module Symphony
             state: state_for(card),
             branch_name: "card-#{card.number}",
             url: Rails.application.routes.url_helpers.card_path(card, script_name: "/#{@account.external_account_id}"),
-            labels: card.tags.map { |tag| tag.name.downcase },
+            labels: card.tags.map { |tag| tag.title.downcase },
             blocked_by: [],
             created_at: card.created_at,
             updated_at: card.updated_at
@@ -82,6 +107,8 @@ module Symphony
             CLOSED_STATE
           elsif card.postponed?
             NOT_NOW_STATE
+          elsif done_column?(card)
+            DONE_STATE
           elsif review_column?(card)
             REVIEW_STATE
           elsif merging_column?(card)
@@ -97,6 +124,10 @@ module Symphony
 
         def merging_column?(card)
           card.column&.name.to_s.casecmp(MERGING_STATE).zero?
+        end
+
+        def done_column?(card)
+          card.column&.name.to_s.casecmp(DONE_STATE).zero?
         end
     end
   end

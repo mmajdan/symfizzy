@@ -33,8 +33,8 @@ tracker:
   board_ids:
     - "<board-uuid>"
     - "<board-uuid>"
-  active_states: ["active", "review", "merging"]
-  terminal_states: ["closed", "not_now"]
+  active_states: ["active"]
+  terminal_states: ["closed", "not_now", "done"]
 ```
 
 How card state is mapped:
@@ -42,19 +42,24 @@ How card state is mapped:
 - `active` → published/open cards not in `Review` or `Merging` columns.
 - `review` → published/open cards in the `Review` column.
 - `merging` → published/open cards in the `Merging` column.
+- `done` → published/open cards in the `Done` column.
 - `closed` → cards with a closure.
 - `not_now` → postponed cards.
+
+The default active state list is only `active`. `review` and `merging` are available state mappings, but they are not reprocessed unless explicitly configured in `WORKFLOW.md`.
 
 ## Pull request + Review transition behavior
 
 When a Symphony run succeeds:
 
-1. Symphony creates or updates a branch in the workspace.
-2. Symphony commits/pushes changes.
-3. Symphony opens a GitHub PR using `gh pr create`.
-4. Symphony moves the Fizzy card into the board `Review` column.
+1. As soon as Symphony claims an active card, it moves the card into the board `In Progress` column.
+2. Symphony creates or updates a branch in the workspace.
+3. Symphony commits/pushes changes.
+4. Symphony opens a GitHub PR using `gh pr create`.
+5. Symphony adds the GitHub PR URL as a card comment.
+6. Symphony moves the Fizzy card into the board `Review` column.
 
-### Required configuration for PR creation
+### Required configuration for PR creation and Review handoff
 
 ```yaml
 github:
@@ -66,6 +71,8 @@ Environment variables:
 
 - `GITHUB_REPO` (if referenced in `WORKFLOW.md`).
 - GitHub auth for `gh` (`GH_TOKEN` / logged-in `gh auth login`).
+
+If GitHub PR creation is not configured or does not return a PR URL, Symphony will not move the card to `Review`.
 
 ## Example WORKFLOW.md
 
@@ -85,7 +92,7 @@ agent:
   max_concurrent_agents: 2
   max_turns: 5
 codex:
-  command: "codex app-server"
+  command: "codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check -"
 github:
   repo: "$GITHUB_REPO"
   base: "main"
@@ -128,4 +135,5 @@ FIZZY_ACCOUNT_ID=<external_account_id> GITHUB_REPO=<org/repo> bin/rails symphony
   - `SYMPHONY_ISSUE_IDENTIFIER`
   - `SYMPHONY_ISSUE_TITLE`
   - `SYMPHONY_PROMPT`
-- Workspaces are created under `workspace.root/<sanitized-identifier>`.
+- Workspaces are created under `workspace.root/<sanitized-identifier>` and are bootstrapped as Git checkouts cloned from the current repository's `origin` remote when possible.
+- `codex.command` must be a task-executing command such as `codex exec ...`; `codex app-server` is not a valid unattended runner command for this implementation.

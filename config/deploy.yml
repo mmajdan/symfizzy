@@ -8,16 +8,21 @@ image: fizzy
 # Where to deploy fizzy
 servers:
   web:
-    - fizzy.example.com  # Set your server name here
+    - localhost
+  symphony:
+    hosts:
+      - localhost
+    cmd: bin/rails "symphony:run[WORKFLOW.md,false]"
+    proxy: false
 
 # How you connect to your server
 ssh:
-  user: root  # If you use a different username to SSH to your server, specify it here
+  user: mmajdan
 
 # Automatic SSL
 proxy:
-  ssl: true                # Set this to false if you *don't* want SSL
-  host: fizzy.example.com  # Set your server name here to use automatic SSL
+  ssl: false
+  host: localhost
 
 # Your application configuration (secrets come from .kamal/secrets).
 env:
@@ -27,12 +32,18 @@ env:
     - VAPID_PRIVATE_KEY
     - SMTP_USERNAME
     - SMTP_PASSWORD
+    - GH_TOKEN
+    - OPENAI_API_KEY
   clear:
-    BASE_URL: https://fizzy.example.com # The public URL of your Fizzy instance
-    MAILER_FROM_ADDRESS: support@example.com # The email "from" address that Fizzy sends email from
-    SMTP_ADDRESS: mail.example.com # The SMTP server you'll use to send email
+    BASE_URL: http://localhost # The public URL of your Fizzy instance
+    MAILER_FROM_ADDRESS: fizzy@mg.majdan.online # The email "from" address that Fizzy sends email from
+    SMTP_ADDRESS: smtp.eu.mailgun.org # The SMTP server you'll use to send email
+    SMTP_PORT: 465 # Mailgun SSL/TLS SMTP port
+    SMTP_TLS: true # Use SMTPS/TLS for outbound mail
     MULTI_TENANT: false # Set to true to allow multiple accounts to sign up
     SOLID_QUEUE_IN_PUMA: true # Run background jobs in the app container
+    GITHUB_REPO: mmajdan/fizzy # GitHub repo Symphony should open PRs against
+    FIZZY_ACCOUNT_ID: 338000007 # External account id Symphony should watch
 
 
 #-- General configuration --#
@@ -47,12 +58,15 @@ aliases:
   console: app exec --interactive --reuse "bin/rails console"
   shell: app exec --interactive --reuse "bash"
   logs: app logs -f
+  symphony_logs: app logs -r symphony -f
+  symphony_shell: app exec -r symphony --interactive --reuse "bash"
   dbc: app exec --interactive --reuse "bin/rails dbconsole --include-password"
 
 # Use a persistent storage volume for sqlite database files and local Active Storage files.
 # Recommended to change this to a mounted volume path that is backed up off server.
 volumes:
   - "fizzy_storage:/rails/storage"
+  - "fizzy_symphony_workspaces:/rails/tmp/symphony_workspaces"
 
 # Bridge fingerprinted assets, like JS and CSS, between versions to avoid
 # hitting 404 on in-flight requests. Combines all files from new and old
@@ -62,3 +76,4 @@ asset_path: /rails/public/assets
 # Configure the image builder.
 builder:
   arch: amd64
+  context: .

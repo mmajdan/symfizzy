@@ -16,7 +16,12 @@ module Symphony
         "SYMPHONY_PROMPT" => prompt
       }
 
-      stdout, stderr, status = Open3.capture3(env, @command, chdir: workspace_path.to_s)
+      stdout, stderr, status = Open3.capture3(
+        env,
+        @command,
+        stdin_data: prompt,
+        chdir: workspace_path.to_s
+      )
 
       Result.new(success: status.success?, status: status.exitstatus, stdout: stdout, stderr: stderr)
     rescue => error
