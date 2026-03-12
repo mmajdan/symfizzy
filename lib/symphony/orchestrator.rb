@@ -20,7 +20,11 @@ module Symphony
       available_slots = [ @config.max_concurrent_agents - @running.size, 0 ].max
 
       candidates.first(available_slots).each do |issue|
-        dispatch_issue(issue, workflow)
+        begin
+          dispatch_issue(issue, workflow)
+        rescue => error
+          @logger.error("Symphony issue #{issue.identifier} failed: #{error.class}: #{error.message}")
+        end
       end
     rescue => error
       @logger.error("Symphony tick failed: #{error.class}: #{error.message}")

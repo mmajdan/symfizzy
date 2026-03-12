@@ -43,7 +43,8 @@ module Symphony
     end
 
     def tracker_board_ids
-      Array(value_for("tracker", "board_ids")).presence
+      board_ids = value_for("tracker", "board_ids", optional: true)
+      Array(board_ids).presence
     end
 
     def tracker_active_states
@@ -107,8 +108,12 @@ module Symphony
     end
 
     private
-      def value_for(*keys)
-        keys.reduce(raw) { |cursor, key| cursor.fetch(key) }
+      def value_for(*keys, optional: false)
+        keys.reduce(raw) do |cursor, key|
+          break nil if optional && !cursor.key?(key)
+
+          cursor.fetch(key)
+        end
       end
 
       def resolve_env(value)

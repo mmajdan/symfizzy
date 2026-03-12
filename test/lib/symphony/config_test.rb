@@ -17,6 +17,12 @@ class Symphony::ConfigTest < ActiveSupport::TestCase
     assert_equal [ "active", "review", "merging" ], config.tracker_active_states
   end
 
+  test "does not require tracker board ids" do
+    config = Symphony::Config.new({ "tracker" => { "account_id" => "1234567" } })
+
+    assert_nil config.tracker_board_ids
+  end
+
   test "requires fizzy account id" do
     config = Symphony::Config.new({})
 
