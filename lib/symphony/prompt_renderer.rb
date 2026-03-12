@@ -11,10 +11,11 @@ module Symphony
       }
 
       template.gsub(VARIABLE_PATTERN) do
-        value = dig_value(context, Regexp.last_match(1).strip)
+        path = Regexp.last_match(1).strip
+        found, value = dig_value(context, path)
 
-        if value.nil?
-          raise WorkflowError, "Unknown template variable: #{Regexp.last_match(1).strip}"
+        unless found
+          raise WorkflowError, "Unknown template variable: #{path}"
         end
 
         value.to_s
@@ -23,12 +24,11 @@ module Symphony
 
     private
       def dig_value(payload, path)
-        path.split(".").reduce(payload) do |cursor, key|
-          if cursor.is_a?(Hash)
-            cursor[key]
-          else
-            nil
-          end
+        path.split(".").reduce([ true, payload ]) do |(found, cursor), key|
+          break [ false, nil ] unless found && cursor.is_a?(Hash)
+          break [ false, nil ] unless cursor.key?(key)
+
+          [ true, cursor[key] ]
         end
       end
   end
