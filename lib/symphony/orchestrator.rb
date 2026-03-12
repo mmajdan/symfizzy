@@ -2,12 +2,13 @@ require "set"
 
 module Symphony
   class Orchestrator
-    def initialize(config:, workflow_loader:, tracker_client:, workspace_manager:, agent_runner:, logger: Rails.logger)
+    def initialize(config:, workflow_loader:, tracker_client:, workspace_manager:, agent_runner:, pull_request_creator:, logger: Rails.logger)
       @config = config
       @workflow_loader = workflow_loader
       @tracker_client = tracker_client
       @workspace_manager = workspace_manager
       @agent_runner = agent_runner
+      @pull_request_creator = pull_request_creator
       @logger = logger
       @running = {}
       @claimed = Set.new
@@ -50,12 +51,23 @@ module Symphony
         result = @agent_runner.run(issue: issue, prompt: prompt, workspace_path: workspace.path)
 
         if result.success
-          @logger.info("Symphony finished #{issue.identifier}")
+          handle_success(issue, workspace.path)
         else
           @logger.error("Symphony failed #{issue.identifier}: #{result.error || result.stderr}")
         end
       ensure
         @claimed.delete(issue.id)
+      end
+
+      def handle_success(issue, workspace_path)
+        pull_request = @pull_request_creator.create_for(issue: issue, workspace_path: workspace_path)
+
+        if pull_request.success
+          @tracker_client.transition_to_review(issue.id)
+          @logger.info("Symphony finished #{issue.identifier}#{" with PR #{pull_request.url}" if pull_request.url.present?}")
+        else
+          @logger.error("Symphony finished #{issue.identifier} but failed to create PR: #{pull_request.error}")
+        end
       end
   end
 end

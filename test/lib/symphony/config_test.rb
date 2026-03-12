@@ -11,6 +11,12 @@ class Symphony::ConfigTest < ActiveSupport::TestCase
     ENV.delete("SYMPHONY_TEST_ACCOUNT")
   end
 
+  test "includes review and merging in default active states" do
+    config = Symphony::Config.new({ "tracker" => { "account_id" => "1234567" } })
+
+    assert_equal [ "active", "review", "merging" ], config.tracker_active_states
+  end
+
   test "requires fizzy account id" do
     config = Symphony::Config.new({})
 

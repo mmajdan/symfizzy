@@ -35,6 +35,7 @@ module Symphony
           tracker_client: tracker,
           workspace_manager: WorkspaceManager.new(root: @config.workspace_root),
           agent_runner: AgentRunner.new(command: @config.codex_command),
+          pull_request_creator: PullRequestCreator.new(repo: @config.github_repo, base_branch: @config.github_base),
           logger: @logger
         )
       end

@@ -5,7 +5,7 @@ module Symphony
     DEFAULTS = {
       "tracker" => {
         "kind" => "fizzy",
-        "active_states" => [ "active" ],
+        "active_states" => [ "active", "review", "merging" ],
         "terminal_states" => [ "closed", "not_now" ]
       },
       "polling" => {
@@ -21,6 +21,10 @@ module Symphony
       },
       "codex" => {
         "command" => "codex app-server"
+      },
+      "github" => {
+        "repo" => nil,
+        "base" => "main"
       }
     }.freeze
 
@@ -43,11 +47,11 @@ module Symphony
     end
 
     def tracker_active_states
-      Array(value_for("tracker", "active_states")).map(&:to_s)
+      Array(value_for("tracker", "active_states")).map { |state| state.to_s.downcase }
     end
 
     def tracker_terminal_states
-      Array(value_for("tracker", "terminal_states")).map(&:to_s)
+      Array(value_for("tracker", "terminal_states")).map { |state| state.to_s.downcase }
     end
 
     def poll_interval_ms
@@ -74,6 +78,14 @@ module Symphony
       value_for("codex", "command").to_s
     end
 
+    def github_repo
+      resolve_env(value_for("github", "repo"))
+    end
+
+    def github_base
+      value_for("github", "base").to_s
+    end
+
     def validate!
       if tracker_kind != "fizzy"
         raise ConfigurationError, "tracker.kind must be fizzy"
@@ -81,6 +93,10 @@ module Symphony
 
       if tracker_account_id.blank?
         raise ConfigurationError, "tracker.account_id is required for fizzy"
+      end
+
+      if tracker_active_states.blank?
+        raise ConfigurationError, "tracker.active_states must include at least one state"
       end
 
       if codex_command.blank?
