@@ -14,11 +14,15 @@ CREATE TABLE IF NOT EXISTS t_customer (
   ),
   cu_first_name_or_reg_name TEXT NOT NULL,
   cu_last_name_or_trade_name TEXT,
-  cu_date_of_birth_or_incorporation TEXT NOT NULL,
+  cu_date_of_birth_or_incorporation TEXT NOT NULL CHECK (
+    date(cu_date_of_birth_or_incorporation) IS NOT NULL
+  ),
   cu_nationality_or_country TEXT NOT NULL,
   cu_address TEXT NOT NULL,
   cu_tax_id TEXT,
-  cu_lei TEXT,
+  cu_lei TEXT CHECK (
+    cu_lei IS NULL OR length(cu_lei) = 20
+  ),
   cu_risk_profile TEXT NOT NULL CHECK (
     cu_risk_profile IN ('low', 'medium', 'significant', 'high')
   )
@@ -48,7 +52,9 @@ CREATE TABLE IF NOT EXISTS t_beneficial_owner (
   bo_customer_id INTEGER NOT NULL,
   bo_first_name TEXT NOT NULL,
   bo_last_name TEXT NOT NULL,
-  bo_date_of_birth TEXT NOT NULL,
+  bo_date_of_birth TEXT NOT NULL CHECK (
+    date(bo_date_of_birth) IS NOT NULL
+  ),
   bo_nationality TEXT NOT NULL,
   bo_nature_and_extent_of_interest TEXT NOT NULL,
   bo_is_senior_managing_official INTEGER NOT NULL DEFAULT 0 CHECK (
@@ -84,7 +90,9 @@ CREATE TABLE IF NOT EXISTS t_suspicious_report (
   sr_report_id INTEGER PRIMARY KEY AUTOINCREMENT,
   sr_customer_id INTEGER NOT NULL,
   sr_entity_id INTEGER NOT NULL,
-  sr_fiu_notification_date TEXT NOT NULL,
+  sr_fiu_notification_date TEXT NOT NULL CHECK (
+    date(sr_fiu_notification_date) IS NOT NULL
+  ),
   sr_underlying_analysis TEXT NOT NULL,
   CONSTRAINT fk_suspicious_report_customer
     FOREIGN KEY (sr_customer_id) REFERENCES t_customer(cu_customer_id)
@@ -98,7 +106,9 @@ CREATE TABLE IF NOT EXISTS t_sanction_screening (
   ss_screening_id INTEGER PRIMARY KEY AUTOINCREMENT,
   ss_customer_id INTEGER NOT NULL,
   ss_entity_id INTEGER NOT NULL,
-  ss_screening_date TEXT NOT NULL,
+  ss_screening_date TEXT NOT NULL CHECK (
+    date(ss_screening_date) IS NOT NULL
+  ),
   ss_hit_status TEXT NOT NULL CHECK (
     ss_hit_status IN ('no_hit', 'potential_hit', 'true_positive')
   ),
