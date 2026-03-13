@@ -1,21 +1,16 @@
 package amlrepository
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
+
+	"gorm.io/gorm"
 )
 
 func TestSchemaSQLExecutesOnSQLite(t *testing.T) {
-	schemaSQL, err := os.ReadFile(filepath.Join(".", "schema.sql"))
-	if err != nil {
-		t.Fatalf("read schema.sql: %v", err)
-	}
-
 	db := openSQLiteTestDB(t)
 
-	if err := db.Exec(string(schemaSQL)).Error; err != nil {
+	if err := ApplySchema(db); err != nil {
 		t.Fatalf("execute schema.sql: %v", err)
 	}
 
@@ -27,14 +22,9 @@ func TestSchemaSQLExecutesOnSQLite(t *testing.T) {
 }
 
 func TestSchemaSQLEnforcesKeyConstraints(t *testing.T) {
-	schemaSQL, err := os.ReadFile(filepath.Join(".", "schema.sql"))
-	if err != nil {
-		t.Fatalf("read schema.sql: %v", err)
-	}
-
 	db := openSQLiteTestDB(t)
 
-	if err := db.Exec(string(schemaSQL)).Error; err != nil {
+	if err := ApplySchema(db); err != nil {
 		t.Fatalf("execute schema.sql: %v", err)
 	}
 
@@ -139,4 +129,101 @@ func TestSchemaSQLEnforcesKeyConstraints(t *testing.T) {
 	`).Error; err == nil || !strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
 		t.Fatalf("expected foreign key constraint error for missing customer, got: %v", err)
 	}
+}
+
+func TestSchemaSQLAppliesForeignKeyActions(t *testing.T) {
+	db := openSQLiteTestDB(t)
+
+	if err := ApplySchema(db); err != nil {
+		t.Fatalf("execute schema.sql: %v", err)
+	}
+
+	assertForeignKeyRule(t, db, "t_business_relationship", foreignKeyRule{
+		From:     "br_customer_id",
+		Table:    "t_customer",
+		To:       "cu_customer_id",
+		OnUpdate: "CASCADE",
+		OnDelete: "RESTRICT",
+	})
+	assertForeignKeyRule(t, db, "t_business_relationship", foreignKeyRule{
+		From:     "br_entity_id",
+		Table:    "t_group_entity",
+		To:       "ge_entity_id",
+		OnUpdate: "CASCADE",
+		OnDelete: "RESTRICT",
+	})
+	assertForeignKeyRule(t, db, "t_beneficial_owner", foreignKeyRule{
+		From:     "bo_customer_id",
+		Table:    "t_customer",
+		To:       "cu_customer_id",
+		OnUpdate: "CASCADE",
+		OnDelete: "CASCADE",
+	})
+	assertForeignKeyRule(t, db, "t_pep_info", foreignKeyRule{
+		From:     "pi_customer_id",
+		Table:    "t_customer",
+		To:       "cu_customer_id",
+		OnUpdate: "CASCADE",
+		OnDelete: "CASCADE",
+	})
+	assertForeignKeyRule(t, db, "t_pep_info", foreignKeyRule{
+		From:     "pi_ubo_id",
+		Table:    "t_beneficial_owner",
+		To:       "bo_ubo_id",
+		OnUpdate: "CASCADE",
+		OnDelete: "CASCADE",
+	})
+	assertForeignKeyRule(t, db, "t_suspicious_report", foreignKeyRule{
+		From:     "sr_customer_id",
+		Table:    "t_customer",
+		To:       "cu_customer_id",
+		OnUpdate: "CASCADE",
+		OnDelete: "RESTRICT",
+	})
+	assertForeignKeyRule(t, db, "t_suspicious_report", foreignKeyRule{
+		From:     "sr_entity_id",
+		Table:    "t_group_entity",
+		To:       "ge_entity_id",
+		OnUpdate: "CASCADE",
+		OnDelete: "RESTRICT",
+	})
+	assertForeignKeyRule(t, db, "t_sanction_screening", foreignKeyRule{
+		From:     "ss_customer_id",
+		Table:    "t_customer",
+		To:       "cu_customer_id",
+		OnUpdate: "CASCADE",
+		OnDelete: "RESTRICT",
+	})
+	assertForeignKeyRule(t, db, "t_sanction_screening", foreignKeyRule{
+		From:     "ss_entity_id",
+		Table:    "t_group_entity",
+		To:       "ge_entity_id",
+		OnUpdate: "CASCADE",
+		OnDelete: "RESTRICT",
+	})
+}
+
+type foreignKeyRule struct {
+	From     string
+	Table    string
+	To       string
+	OnUpdate string
+	OnDelete string
+}
+
+func assertForeignKeyRule(t *testing.T, db *gorm.DB, table string, expected foreignKeyRule) {
+	t.Helper()
+
+	var rules []foreignKeyRule
+	if err := db.Raw("PRAGMA foreign_key_list(" + "'" + table + "'" + ")").Scan(&rules).Error; err != nil {
+		t.Fatalf("load foreign keys for %s: %v", table, err)
+	}
+
+	for _, rule := range rules {
+		if rule == expected {
+			return
+		}
+	}
+
+	t.Fatalf("expected foreign key %#v on %s, got %#v", expected, table, rules)
 }
