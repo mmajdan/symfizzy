@@ -8,7 +8,8 @@ Files:
 - `schema.sql`: SQLite DDL with foreign keys, indexes, and basic integrity checks.
 - `models.go`: GORM model definitions aligned with the SQLite schema.
 - `go.mod`: standalone Go module definition for the GORM package.
-- `models_test.go`: smoke test proving the model set migrates cleanly on SQLite.
+- `models_test.go`: smoke tests proving the model set migrates cleanly on SQLite and enforces core constraints.
+- `schema_test.go`: smoke test proving `schema.sql` executes cleanly on SQLite.
 
 Design assumptions:
 - Primary keys use `INTEGER PRIMARY KEY AUTOINCREMENT` to keep the schema simple
