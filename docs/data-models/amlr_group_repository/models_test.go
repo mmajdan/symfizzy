@@ -91,4 +91,43 @@ func TestRepositoryModelsEnforceKeyConstraints(t *testing.T) {
 	if err := db.Create(&invalidCustomer).Error; err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
 		t.Fatalf("expected customer risk profile check constraint error, got: %v", err)
 	}
+
+	invalidLeiCustomer := Customer{
+		CuCustomerType:               "legal_person",
+		CuFirstNameOrRegName:         "Short LEI Corp",
+		CuDateOfBirthOrIncorporation: time.Date(2021, time.February, 3, 0, 0, 0, 0, time.UTC),
+		CuNationalityOrCountry:       "PL",
+		CuAddress:                    "ul. Wadliwa 3, Krakow",
+		CuLEI:                        ptr("12345"),
+		CuRiskProfile:                "medium",
+	}
+	if err := db.Create(&invalidLeiCustomer).Error; err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
+		t.Fatalf("expected customer LEI check constraint error, got: %v", err)
+	}
+
+	beneficialOwner := BeneficialOwner{
+		BoCustomerID:                customer.CuCustomerID,
+		BoFirstName:                 "Jan",
+		BoLastName:                  "Kowalski",
+		BoDateOfBirth:               time.Date(1980, time.January, 2, 0, 0, 0, 0, time.UTC),
+		BoNationality:               "PL",
+		BoNatureAndExtentOfInterest: "Owns 75% of shares",
+	}
+	if err := db.Create(&beneficialOwner).Error; err != nil {
+		t.Fatalf("create beneficial owner: %v", err)
+	}
+
+	invalidPepWithBothParents := PepInfo{
+		PiCustomerID:     &customer.CuCustomerID,
+		PiUboID:          &beneficialOwner.BoUboID,
+		PiPepCategory:    "pep",
+		PiPublicFunction: "Minister of Finance",
+	}
+	if err := db.Create(&invalidPepWithBothParents).Error; err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
+		t.Fatalf("expected pep exclusive parent check constraint error, got: %v", err)
+	}
+}
+
+func ptr[T any](value T) *T {
+	return &value
 }
