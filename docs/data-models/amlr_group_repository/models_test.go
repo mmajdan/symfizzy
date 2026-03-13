@@ -4,16 +4,10 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
 )
 
 func TestRepositoryModelsAutoMigrate(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite database: %v", err)
-	}
+	db := openSQLiteTestDB(t)
 
 	if err := db.AutoMigrate(RepositoryModels()...); err != nil {
 		t.Fatalf("auto migrate repository models: %v", err)
@@ -27,10 +21,7 @@ func TestRepositoryModelsAutoMigrate(t *testing.T) {
 }
 
 func TestRepositoryModelsEnforceKeyConstraints(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite database: %v", err)
-	}
+	db := openSQLiteTestDB(t)
 
 	if err := db.Exec("PRAGMA foreign_keys = ON").Error; err != nil {
 		t.Fatalf("enable foreign keys: %v", err)
