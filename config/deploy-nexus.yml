@@ -68,8 +68,8 @@ registry:
   password:
     - GH_TOKEN
 
-# Handy aliases for interacting with your deployment. For eaxmple: `bin/kamal console` will connect to a
-# Rails console in production.
+# Handy aliases for interacting with your deployment. For example: `bin/kamal console -c config/deploy-nexus.yml`
+# will connect to a Rails console on nexus.
 aliases:
   console: app exec --interactive --reuse "bin/rails console"
   shell: app exec --interactive --reuse "bash"
@@ -79,7 +79,6 @@ aliases:
   dbc: app exec --interactive --reuse "bin/rails dbconsole --include-password"
 
 # Use a persistent storage volume for sqlite database files and local Active Storage files.
-# Recommended to change this to a mounted volume path that is backed up off server.
 volumes:
   - "fizzy_storage:/rails/storage"
   - "fizzy_symphony_workspaces:/rails/tmp/symphony_workspaces"

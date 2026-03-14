@@ -42,3 +42,7 @@
 /config/credentials/*.key
 .DS_Store
 .kamal/secrets
+.kamal/*.pem
+.kamal/localhost-cert.pem
+.kamal/localhost-key.pem
+/setvars.sh

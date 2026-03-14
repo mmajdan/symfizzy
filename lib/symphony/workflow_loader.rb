@@ -2,6 +2,8 @@ require "yaml"
 
 module Symphony
   class WorkflowLoader
+    attr_reader :path
+
     FRONT_MATTER_BOUNDARY = "---".freeze
 
     WorkflowDefinition = Struct.new(:config, :prompt_template, keyword_init: true)

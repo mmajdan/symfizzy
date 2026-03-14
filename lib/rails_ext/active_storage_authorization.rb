@@ -18,32 +18,36 @@ ActiveSupport.on_load :active_storage_attachment do
   end
 end
 
-Rails.application.config.to_prepare do
-  module ActiveStorage::Authorize
-    extend ActiveSupport::Concern
+module ActiveStorage::Authorize
+  extend ActiveSupport::Concern
 
+  included do
     include Authentication
 
-    included do
-      # Ensure require_authentication runs after set_blob.
-      skip_before_action :require_authentication
-      before_action :require_authentication, :ensure_accessible, unless: :publicly_accessible_blob?
-    end
-
-    private
-      def publicly_accessible_blob?
-        @blob.publicly_accessible?
-      end
-
-      def ensure_accessible
-        unless @blob.accessible_to?(Current.user)
-          head :forbidden
-        end
-      end
+    # Ensure require_authentication runs after set_blob.
+    skip_before_action :require_authentication
+    before_action :require_authentication, :ensure_accessible, unless: :publicly_accessible_blob?
   end
 
-  ActiveStorage::Blobs::RedirectController.include ActiveStorage::Authorize
-  ActiveStorage::Blobs::ProxyController.include ActiveStorage::Authorize
-  ActiveStorage::Representations::RedirectController.include ActiveStorage::Authorize
-  ActiveStorage::Representations::ProxyController.include ActiveStorage::Authorize
+  private
+    def publicly_accessible_blob?
+      @blob.publicly_accessible?
+    end
+
+    def ensure_accessible
+      unless @blob.accessible_to?(Current.user)
+        head :forbidden
+      end
+    end
+end
+
+[
+  "ActiveStorage::Blobs::RedirectController",
+  "ActiveStorage::Blobs::ProxyController",
+  "ActiveStorage::Representations::RedirectController",
+  "ActiveStorage::Representations::ProxyController"
+].each do |controller_name|
+  Rails.autoloaders.main.on_load(controller_name) do |controller, _abspath|
+    controller.include ActiveStorage::Authorize unless controller < ActiveStorage::Authorize
+  end
 end

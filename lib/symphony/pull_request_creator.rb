@@ -26,11 +26,14 @@ module Symphony
       with_workspace_git(workspace_path, "checkout -B #{Shellwords.escape(branch)}")
       with_workspace_git(workspace_path, "add -A")
 
-      unless working_tree_dirty?(workspace_path)
+      if working_tree_dirty?(workspace_path)
+        with_workspace_git(workspace_path, "commit -m #{Shellwords.escape(title)}")
+      end
+
+      unless branch_has_changes_against_base?(workspace_path)
         return Result.new(success: false, error: "No changes produced in workspace")
       end
 
-      with_workspace_git(workspace_path, "commit -m #{Shellwords.escape(title)}")
       with_workspace_git(workspace_path, "push -u origin #{Shellwords.escape(branch)}")
 
       cmd = [
@@ -66,8 +69,28 @@ module Symphony
         status.present?
       end
 
+      def branch_has_changes_against_base?(workspace_path)
+        comparison_base = remote_base_branch(workspace_path)
+        commit_count = run_command!(workspace_path, "git rev-list --count #{Shellwords.escape(comparison_base)}..HEAD")
+
+        commit_count.to_i.positive?
+      end
+
       def with_workspace_git(workspace_path, args)
         run_command!(workspace_path, "git #{args}")
+      end
+
+      def remote_base_branch(workspace_path)
+        if remote_branch_exists?(workspace_path, "origin/#{@base_branch}")
+          "origin/#{@base_branch}"
+        else
+          @base_branch
+        end
+      end
+
+      def remote_branch_exists?(workspace_path, branch)
+        _output, status = Open3.capture2e("git rev-parse --verify #{Shellwords.escape(branch)}", chdir: workspace_path.to_s)
+        status.success?
       end
 
       def run_command!(workspace_path, command)

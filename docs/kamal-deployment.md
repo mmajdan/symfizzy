@@ -54,7 +54,6 @@ VAPID_PRIVATE_KEY=somethingelse
 SMTP_USERNAME=email-provider-username
 SMTP_PASSWORD=email-provider-password
 GH_TOKEN=github-token-with-repo-access
-OPENAI_API_KEY=openai-api-key
 ```
 
 The values you enter here will be specific to you, and you can get or create them as follows:
@@ -63,7 +62,6 @@ The values you enter here will be specific to you, and you can get or create the
 - `SMTP_USERNAME` & `SMTP_PASSWORD` should be valid credentials for your SMTP server. If you're using a 3rd-party service here, consult their documentation for what to use.
 - `VAPID_PUBLIC_KEY` & `VAPID_PRIVATE_KEY` are a pair of credentials that are used for sending notifications. You can create your own keys by starting a development console with:
 - `GH_TOKEN` must allow `gh pr create` for the GitHub repo Symphony will target.
-- `OPENAI_API_KEY` is required for the Codex CLI that Symphony runs inside the deployed container.
 
   ```sh
   bin/rails c
@@ -101,7 +99,7 @@ bin/kamal deploy
 The starter Kamal config now includes a dedicated `symphony` role that runs:
 
 ```sh
-bin/rails "symphony:run[WORKFLOW.md,false]"
+bin/rails symphony:run
 ```
 
 That role uses the same application image as the web role, but the image now includes the extra runtime dependencies Symphony needs in production:
@@ -109,14 +107,68 @@ That role uses the same application image as the web role, but the image now inc
 - `git`
 - `gh`
 - Node.js
-- the Codex CLI
+- the agent CLI (`codex`, `opencode`, or another compatible command)
 
-Before deploying with Symphony enabled, set these values in `config/deploy.yml`:
+The repository `WORKFLOW.md` now carries the Symphony runtime configuration directly:
 
-- `env/clear/GITHUB_REPO`: the GitHub repository Symphony should open PRs against
-- `env/clear/FIZZY_ACCOUNT_ID`: the Fizzy account Symphony should watch
+```yaml
+tracker:
+  kind: fizzy
+  account_id: "338000007"
+  board_ids:
+    - "03fqxewg4or354b6nhqq8inpb"
+  active_states:
+    - active
+  terminal_states:
+    - closed
+    - not_now
+    - done
+polling:
+  interval_ms: 30000
+workspace:
+  root: tmp/symphony_workspaces
+agent:
+  max_concurrent_agents: 2
+  max_turns: 8
+runner:
+  command: "opencode run --format json"
+  auth_strategy: "api_key_only"
+  model: "fireworks-ai/accounts/fireworks/models/kimi-k2p5"
+  api_key: "<fireworks-api-key>"
+  api_key_env: "FIREWORKS_API_KEY"
+github:
+  repo: "mmajdan/amelia"
+  base: "main"
+```
+
+The deployed worker uses `opencode` with API-key authentication by default. The repository root
+[`opencode.json`](../opencode.json) is loaded automatically from each cloned workspace and injects
+`FIREWORKS_API_KEY` into the Fireworks provider configuration. `Symphony::AgentRunner` now maps the
+literal `runner.api_key` value from `WORKFLOW.md` into that environment variable when it launches
+`opencode`, so Kamal does not need a separate AI secret for the worker.
 
 The deploy config also mounts a persistent volume at `/rails/tmp/symphony_workspaces` so issue workspaces survive container replacement.
+
+`SYMPHONY_WORKFLOW_PATH` controls where the worker loads `WORKFLOW.md` from:
+
+- If it points to a file, Symphony uses that file directly.
+- If it points to a directory, Symphony starts one worker per file in that directory.
+
+When the workflow lives outside the image, pass the env var into the container and add a bind mount
+for the host directory. Example:
+
+```yaml
+env:
+  clear:
+    SYMPHONY_WORKFLOW_PATH: /rails/symphony
+
+volumes:
+  - "/srv/fizzy/symphony:/rails/symphony:ro"
+```
+
+In that example the host directory `/srv/fizzy/symphony` is mounted read-only at
+`/rails/symphony` inside the container, and Symphony will start one worker for each file directly
+inside `/rails/symphony`.
 
 Useful Kamal aliases:
 

@@ -7,12 +7,14 @@ module Symphony
       CLOSED_STATE = "closed".freeze
       NOT_NOW_STATE = "not_now".freeze
       DONE_STATE = "done".freeze
+      TODO_COLUMN_NAME = "todo".freeze
       IN_PROGRESS_COLUMN_NAME = "In Progress".freeze
 
-      def initialize(account_id:, board_ids: nil, active_states:, terminal_states:)
+      def initialize(account_id:, board_ids: nil, active_states:, active_column_names: nil, terminal_states:)
         @account = Account.find_by!(external_account_id: account_id)
         @board_ids = board_ids
         @active_states = active_states.map(&:downcase)
+        @active_column_names = Array(active_column_names).filter_map { |name| name.to_s.strip.downcase.presence }.presence
         @terminal_states = terminal_states.map(&:downcase)
       end
 
@@ -21,7 +23,7 @@ module Symphony
 
         cards.filter_map do |card|
           issue = to_issue(card)
-          issue if @active_states.include?(issue.state)
+          issue if @active_states.include?(issue.state) && active_column_allowed?(card, issue.state)
         end
       end
 
@@ -107,6 +109,8 @@ module Symphony
             CLOSED_STATE
           elsif card.postponed?
             NOT_NOW_STATE
+          elsif active_column?(card)
+            ACTIVE_STATE
           elsif done_column?(card)
             DONE_STATE
           elsif review_column?(card)
@@ -114,7 +118,13 @@ module Symphony
           elsif merging_column?(card)
             MERGING_STATE
           else
-            ACTIVE_STATE
+            NOT_NOW_STATE
+          end
+        end
+
+        def active_column?(card)
+          [ TODO_COLUMN_NAME, IN_PROGRESS_COLUMN_NAME ].any? do |column_name|
+            card.column&.name.to_s.casecmp(column_name).zero?
           end
         end
 
@@ -128,6 +138,13 @@ module Symphony
 
         def done_column?(card)
           card.column&.name.to_s.casecmp(DONE_STATE).zero?
+        end
+
+        def active_column_allowed?(card, issue_state)
+          return true if @active_column_names.blank?
+          return false unless issue_state == ACTIVE_STATE
+
+          @active_column_names.include?(card.column&.name.to_s.strip.downcase)
         end
     end
   end

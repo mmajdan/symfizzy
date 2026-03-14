@@ -11,6 +11,7 @@
 ARG RUBY_VERSION=3.4.7
 ARG NODE_VERSION=25.2.1
 ARG CODEX_VERSION=0.114.0
+ARG OPENCODE_VERSION=1.2.15
 FROM docker.io/library/ruby:$RUBY_VERSION-slim AS base
 FROM docker.io/library/node:$NODE_VERSION-slim AS node_runtime
 
@@ -27,7 +28,7 @@ RUN apt-get update -qq && \
 
 COPY --from=node_runtime /usr/local/ /usr/local/
 
-RUN npm install -g @openai/codex@$CODEX_VERSION && \
+RUN npm install -g @openai/codex@$CODEX_VERSION opencode-ai@$OPENCODE_VERSION && \
     npm cache clean --force
 
 # Set production environment variables and enable jemalloc for reduced memory usage and latency.
@@ -79,6 +80,7 @@ LABEL org.opencontainers.image.licenses="O'Saasy"
 # Run and own only the runtime files as a non-root user for security
 RUN groupadd --system --gid 1000 rails && \
     useradd rails --uid 1000 --gid 1000 --create-home --shell /bin/bash
+RUN mkdir -p /rails/tmp/symphony_workspaces && chown -R rails:rails /rails/tmp/symphony_workspaces
 USER 1000:1000
 
 # Copy built artifacts: gems, application

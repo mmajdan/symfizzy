@@ -1,0 +1,29 @@
+nexus.majdan.online {
+	@webhook path /mailgun/endpoint*
+	handle @webhook {
+		rewrite * /mailgun/inbound
+		reverse_proxy 127.0.0.1:8787
+	}
+
+	@protected not path /mailgun/endpoint*
+#	basic_auth @protected {
+#		nexus $2a$14$OKj9UDzwsDSPuMWsLL5cr.Ibs3BdA.3NJ62cdzh0QwOK3A2GkdifG
+#	}
+
+	reverse_proxy 127.0.0.1:3008
+}
+
+autopilot.re {
+	@webhook path /mailgun/endpoint*
+	handle @webhook {
+		rewrite * /mailgun/inbound
+		reverse_proxy 127.0.0.1:8787
+	}
+
+	@protected not path /mailgun/endpoint*
+#	basic_auth @protected {
+#		nexus $2a$14$OKj9UDzwsDSPuMWsLL5cr.Ibs3BdA.3NJ62cdzh0QwOK3A2GkdifG
+#	}
+
+	reverse_proxy 127.0.0.1:3008
+}

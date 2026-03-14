@@ -12,6 +12,8 @@ class DatabaseRoleLogger
   end
 end
 
-if ActiveRecord::Base.replica_configured?
-  Rails.application.config.middleware.insert_after ActiveRecord::Middleware::DatabaseSelector, DatabaseRoleLogger
+ActiveSupport.on_load(:active_record) do
+  if ActiveRecord::Base.replica_configured?
+    Rails.application.config.middleware.insert_after ActiveRecord::Middleware::DatabaseSelector, DatabaseRoleLogger
+  end
 end

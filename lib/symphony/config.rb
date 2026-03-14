@@ -19,19 +19,30 @@ module Symphony
         "max_retry_backoff_ms" => 300_000,
         "max_turns" => 20
       },
-      "codex" => {
-        "command" => "codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check -"
+      "runner" => {
+        "command" => "codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check -",
+        "model" => nil,
+        "base_url" => nil,
+        "auth_strategy" => "login_then_api_key",
+        "api_key" => nil,
+        "api_key_env" => "OPENAI_API_KEY",
+        "wire_api" => "responses",
+        "model_provider" => "symphony_openai_compatible"
       },
       "github" => {
         "repo" => nil,
-        "base" => "main"
+        "base" => "main",
+        "username" => nil,
+        "token" => nil,
+        "token_env" => nil
       }
     }.freeze
 
     attr_reader :raw
 
     def initialize(raw)
-      @raw = DEFAULTS.deep_merge(raw.deep_stringify_keys)
+      @input_raw = raw.deep_stringify_keys
+      @raw = DEFAULTS.deep_merge(@input_raw)
     end
 
     def tracker_kind
@@ -44,15 +55,22 @@ module Symphony
 
     def tracker_board_ids
       board_ids = value_for("tracker", "board_ids", optional: true)
-      Array(board_ids).presence
+      Array(board_ids).filter_map do |board_id|
+        normalized = resolve_env(board_id).to_s.strip
+        normalized.presence
+      end.presence
     end
 
     def tracker_active_states
-      Array(value_for("tracker", "active_states")).map { |state| state.to_s.downcase }
+      normalized_states_for(value_for("tracker", "active_states"))
+    end
+
+    def tracker_active_column_names
+      normalized_names_for(value_for("tracker", "active_column_names", optional: true))
     end
 
     def tracker_terminal_states
-      Array(value_for("tracker", "terminal_states")).map { |state| state.to_s.downcase }
+      normalized_states_for(value_for("tracker", "terminal_states"))
     end
 
     def poll_interval_ms
@@ -75,8 +93,36 @@ module Symphony
       value_for("agent", "max_turns").to_i
     end
 
-    def codex_command
-      value_for("codex", "command").to_s
+    def runner_command
+      resolve_env(runner_value_for("command", optional: true)).presence || DEFAULTS.dig("runner", "command")
+    end
+
+    def runner_base_url
+      resolve_env(runner_value_for("base_url", optional: true)).presence
+    end
+
+    def runner_auth_strategy
+      resolve_env(runner_value_for("auth_strategy", optional: true)).presence || DEFAULTS.dig("runner", "auth_strategy")
+    end
+
+    def runner_model
+      resolve_env(runner_value_for("model", optional: true)).presence
+    end
+
+    def runner_api_key_env
+      resolve_env(runner_value_for("api_key_env", optional: true)).presence || DEFAULTS.dig("runner", "api_key_env")
+    end
+
+    def runner_api_key
+      resolve_env(runner_value_for("api_key", optional: true)).presence
+    end
+
+    def runner_wire_api
+      resolve_env(runner_value_for("wire_api", optional: true)).presence || DEFAULTS.dig("runner", "wire_api")
+    end
+
+    def runner_model_provider
+      resolve_env(runner_value_for("model_provider", optional: true)).presence || DEFAULTS.dig("runner", "model_provider")
     end
 
     def github_repo
@@ -85,6 +131,16 @@ module Symphony
 
     def github_base
       value_for("github", "base").to_s
+    end
+
+    def github_username
+      value_for("github", "username").to_s.strip.presence
+    end
+
+    def github_token
+      resolve_env(value_for("github", "token", optional: true)).presence ||
+        resolve_env(value_for("github", "github_token", optional: true)).presence ||
+        resolve_env(value_for("github", "token_env", optional: true)).presence
     end
 
     def validate!
@@ -100,12 +156,28 @@ module Symphony
         raise ConfigurationError, "tracker.active_states must include at least one state"
       end
 
-      if codex_command.blank?
-        raise ConfigurationError, "codex.command is required"
+      if runner_command.blank?
+        raise ConfigurationError, "runner.command is required"
       end
 
-      if codex_command.match?(/\bcodex\s+app-server\b/)
-        raise ConfigurationError, "codex.command must run a task executor, not `codex app-server`"
+      if runner_command.match?(/\bcodex\s+app-server\b/)
+        raise ConfigurationError, "runner.command must run a task executor, not `codex app-server`"
+      end
+
+      unless runner_auth_strategy.in?(%w[login_then_api_key login_only api_key_only])
+        raise ConfigurationError, "runner.auth_strategy must be one of: login_then_api_key, login_only, api_key_only"
+      end
+
+      if github_repo.blank?
+        raise ConfigurationError, "github.repo is required"
+      end
+
+      if runner_base_url.present? && runner_api_key_env.blank?
+        raise ConfigurationError, "runner.api_key_env is required when runner.base_url is set"
+      end
+
+      if runner_api_key.present? && runner_api_key_env.blank?
+        raise ConfigurationError, "runner.api_key_env is required when runner.api_key is set"
       end
 
       true
@@ -120,12 +192,36 @@ module Symphony
         end
       end
 
+      def runner_value_for(key, optional: false)
+        if @input_raw.dig("runner", key).present?
+          value_for("runner", key, optional: optional)
+        elsif @input_raw.dig("codex", key).present?
+          value_for("codex", key, optional: optional)
+        else
+          value_for("runner", key, optional: optional)
+        end
+      end
+
       def resolve_env(value)
         if value.is_a?(String) && value.start_with?("$")
           ENV[value.delete_prefix("$")]
         else
           value
         end
+      end
+
+      def normalized_states_for(values)
+        Array(values).filter_map do |state|
+          normalized = state.to_s.strip.downcase
+          normalized.presence
+        end
+      end
+
+      def normalized_names_for(values)
+        Array(values).filter_map do |value|
+          normalized = value.to_s.strip
+          normalized.presence
+        end.presence
       end
   end
 end

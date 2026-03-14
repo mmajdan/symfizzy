@@ -12,6 +12,6 @@ module TurboStreamsJobExtensions
   end
 end
 
-Rails.application.config.after_initialize do
-  Turbo::StreamsChannel.prepend TurboStreamsJobExtensions
+Rails.autoloaders.main.on_load("Turbo::StreamsChannel") do |channel, _abspath|
+  channel.singleton_class.prepend TurboStreamsJobExtensions unless channel.singleton_class < TurboStreamsJobExtensions
 end

@@ -1,0 +1,10 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "fireworks-ai": {
+      "options": {
+        "apiKey": "{env:FIREWORKS_API_KEY}"
+      }
+    }
+  }
+}

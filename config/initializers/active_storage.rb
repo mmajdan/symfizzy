@@ -2,8 +2,8 @@ ActiveSupport.on_load(:active_storage_attachment) do
   include Storage::AttachmentTracking
 end
 
-ActiveSupport.on_load(:active_storage_blob) do
-  ActiveStorage::DiskController.after_action only: :show do
+Rails.autoloaders.main.on_load("ActiveStorage::DiskController") do |controller, _abspath|
+  controller.after_action only: :show do
     expires_in 5.minutes, public: true
   end
 end
@@ -56,7 +56,10 @@ module ActiveStorageDirectUploadsControllerExtensions
   end
 end
 
-Rails.application.config.to_prepare do
-  ActiveStorage::BaseController.include ActiveStorageControllerExtensions
-  ActiveStorage::DirectUploadsController.include ActiveStorageDirectUploadsControllerExtensions
+Rails.autoloaders.main.on_load("ActiveStorage::BaseController") do |controller, _abspath|
+  controller.include ActiveStorageControllerExtensions unless controller < ActiveStorageControllerExtensions
+end
+
+Rails.autoloaders.main.on_load("ActiveStorage::DirectUploadsController") do |controller, _abspath|
+  controller.include ActiveStorageDirectUploadsControllerExtensions unless controller < ActiveStorageDirectUploadsControllerExtensions
 end
