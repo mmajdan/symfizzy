@@ -12,6 +12,7 @@ module Symphony
       @logger = logger
       @running = {}
       @claimed = Set.new
+      @mutex = Mutex.new
     end
 
     def tick
@@ -23,9 +24,9 @@ module Symphony
 
       candidates.first(available_slots).each do |issue|
         begin
-          dispatch_issue(issue, workflow)
+          dispatch_issue_async(issue, workflow)
         rescue => error
-          @logger.error("Symphony issue #{issue.identifier} failed: #{error.class}: #{error.message}")
+          @logger.error("Symphony issue #{issue.identifier} failed to dispatch: #{error.class}: #{error.message}")
         end
       end
     rescue => error
@@ -40,10 +41,14 @@ module Symphony
         end
       end
 
-      def dispatch_issue(issue, workflow)
+      def dispatch_issue_async(issue, workflow)
         return if @claimed.include?(issue.id)
 
-        @claimed.add(issue.id)
+        @mutex.synchronize do
+          @claimed.add(issue.id)
+          @running[issue.id] = issue
+        end
+
         @logger.info("Symphony picking up #{issue.identifier} (state: #{issue.state})")
         log_issue_contents(issue)
         @tracker_client.transition_to_in_progress(issue.id)
@@ -51,7 +56,9 @@ module Symphony
 
         # If issue is in rework state, checkout existing branch
         branch_name = issue.state == "rework" ? issue.branch_name : nil
+        @logger.info("Symphony creating workspace for #{issue.identifier}...")
         workspace = @workspace_manager.create_for_issue(issue.identifier, branch_name: branch_name)
+        @logger.info("Symphony workspace created for #{issue.identifier} at #{workspace.path}")
         prompt = PromptRenderer.new.render(
           template: workflow.prompt_template,
           issue: issue,
@@ -61,16 +68,28 @@ module Symphony
         )
 
         @logger.info("Symphony implementing #{issue.identifier} in #{workspace.path}")
-        result = @agent_runner.run(issue: issue, prompt: prompt, workspace_path: workspace.path)
 
-        if result.success
-          @logger.info("Symphony implementation finished for #{issue.identifier}; creating PR")
-          handle_success(issue, workspace.path, result)
-        else
-          @logger.error("Symphony implementation failed for #{issue.identifier} (state: #{current_state(issue.id)}): #{result.error || result.stderr}")
+        # Run agent asynchronously in a separate thread
+        Thread.new do
+          begin
+            result = @agent_runner.run(issue: issue, prompt: prompt, workspace_path: workspace.path)
+
+            if result.success
+              @logger.info("Symphony implementation finished for #{issue.identifier}; creating PR")
+              handle_success(issue, workspace.path, result)
+            else
+              @logger.error("Symphony implementation failed for #{issue.identifier} (state: #{current_state(issue.id)}): #{result.error || result.stderr}")
+            end
+          rescue => error
+            @logger.error("Symphony agent thread failed for #{issue.identifier}: #{error.class}: #{error.message}")
+          ensure
+            @mutex.synchronize do
+              @claimed.delete(issue.id)
+              @running.delete(issue.id)
+            end
+            @logger.info("Symphony agent thread finished for #{issue.identifier}; slot freed")
+          end
         end
-      ensure
-        @claimed.delete(issue.id)
       end
 
       def handle_success(issue, workspace_path, result)

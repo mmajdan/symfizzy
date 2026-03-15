@@ -1,5 +1,7 @@
 module Symphony
   class Service
+    puts "DEBUG: Symphony::Service loading"
+
     def initialize(workflow_path: WorkflowPathResolver.resolve, logger: Rails.logger)
       @workflow_loader = WorkflowLoader.new(path: workflow_path)
       @config = Config.new(@workflow_loader.load.config)
@@ -8,13 +10,25 @@ module Symphony
     end
 
     def run(once: false)
+      puts "DEBUG: Symphony::Service#run starting"
       orchestrator = build_orchestrator
+      puts "DEBUG: Orchestrator built"
 
       if once
+        puts "DEBUG: Running single tick"
         orchestrator.tick
       else
+        puts "DEBUG: Starting main loop"
         loop do
-          orchestrator.tick
+          begin
+            puts "DEBUG: About to call orchestrator.tick"
+            @logger.info("Symphony starting tick...")
+            orchestrator.tick
+            @logger.info("Symphony tick completed, sleeping for #{@config.poll_interval_ms / 1000.0}s")
+          rescue => error
+            @logger.error("Symphony tick error: #{error.class}: #{error.message}")
+            @logger.error(error.backtrace.first(5).join("\n"))
+          end
           sleep(@config.poll_interval_ms / 1000.0)
         end
       end

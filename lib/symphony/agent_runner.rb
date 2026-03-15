@@ -64,12 +64,16 @@ module Symphony
 
       def run_command(env:, argv:, prompt:, workspace_path:, auth_mode:)
         command_argv, stdin_data = command_input(argv, prompt)
-        stdout, stderr, status = Open3.capture3(
-          env,
-          *command_argv,
-          stdin_data: stdin_data,
-          chdir: workspace_path.to_s
-        )
+        stdout, stderr, status = nil
+
+        Timeout.timeout(600) do  # 10 minutes timeout for agent runs
+          stdout, stderr, status = Open3.capture3(
+            env,
+            *command_argv,
+            stdin_data: stdin_data,
+            chdir: workspace_path.to_s
+          )
+        end
 
         Result.new(
           success: status.success?,
@@ -166,8 +170,13 @@ module Symphony
 
       def login_status
         @login_status ||= begin
-          output, status = Open3.capture2e(login_status_command)
+          output, status = nil
+          Timeout.timeout(10) do  # 10 seconds timeout
+            output, status = Open3.capture2e(login_status_command)
+          end
           status.success? ? output : ""
+        rescue Timeout::Error
+          ""
         end
       end
 
