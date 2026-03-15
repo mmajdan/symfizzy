@@ -4,11 +4,13 @@ module Symphony
       REVIEW_STATE = "review".freeze
       MERGING_STATE = "merging".freeze
       ACTIVE_STATE = "active".freeze
+      REWORK_STATE = "rework".freeze
       CLOSED_STATE = "closed".freeze
       NOT_NOW_STATE = "not_now".freeze
       DONE_STATE = "done".freeze
       TODO_COLUMN_NAME = "todo".freeze
       IN_PROGRESS_COLUMN_NAME = "In Progress".freeze
+      REWORK_COLUMN_NAME = "rework".freeze
 
       def initialize(account_id:, board_ids: nil, active_states:, active_column_names: nil, terminal_states:)
         @account = Account.find_by!(external_account_id: account_id)
@@ -111,6 +113,8 @@ module Symphony
             NOT_NOW_STATE
           elsif active_column?(card)
             ACTIVE_STATE
+          elsif rework_column?(card)
+            REWORK_STATE
           elsif done_column?(card)
             DONE_STATE
           elsif review_column?(card)
@@ -128,6 +132,10 @@ module Symphony
           end
         end
 
+        def rework_column?(card)
+          card.column&.name.to_s.casecmp(REWORK_COLUMN_NAME).zero?
+        end
+
         def review_column?(card)
           card.column&.name.to_s.casecmp(REVIEW_STATE).zero?
         end
@@ -142,7 +150,7 @@ module Symphony
 
         def active_column_allowed?(card, issue_state)
           return true if @active_column_names.blank?
-          return false unless issue_state == ACTIVE_STATE
+          return false unless @active_states.include?(issue_state)
 
           @active_column_names.include?(card.column&.name.to_s.strip.downcase)
         end

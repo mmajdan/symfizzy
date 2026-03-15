@@ -68,7 +68,7 @@ registry:
   password:
     - GH_TOKEN
 
-# Handy aliases for interacting with your deployment. For eaxmple: `bin/kamal console` will connect to a
+# Handy aliases for interacting with your deployment. For example: `bin/kamal console` will connect to a
 # Rails console in production.
 aliases:
   console: app exec --interactive --reuse "bin/rails console"

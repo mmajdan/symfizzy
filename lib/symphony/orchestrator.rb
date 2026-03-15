@@ -49,7 +49,9 @@ module Symphony
         @tracker_client.transition_to_in_progress(issue.id)
         @logger.info("Symphony moved #{issue.identifier} to In Progress (state: #{current_state(issue.id)})")
 
-        workspace = @workspace_manager.create_for_issue(issue.identifier)
+        # If issue is in rework state, checkout existing branch
+        branch_name = issue.state == "rework" ? issue.branch_name : nil
+        workspace = @workspace_manager.create_for_issue(issue.identifier, branch_name: branch_name)
         prompt = PromptRenderer.new.render(
           template: workflow.prompt_template,
           issue: issue,
@@ -63,7 +65,7 @@ module Symphony
 
         if result.success
           @logger.info("Symphony implementation finished for #{issue.identifier}; creating PR")
-          handle_success(issue, workspace.path)
+          handle_success(issue, workspace.path, result)
         else
           @logger.error("Symphony implementation failed for #{issue.identifier} (state: #{current_state(issue.id)}): #{result.error || result.stderr}")
         end
@@ -71,11 +73,26 @@ module Symphony
         @claimed.delete(issue.id)
       end
 
-      def handle_success(issue, workspace_path)
+      def handle_success(issue, workspace_path, result)
         pull_request = @pull_request_creator.create_for(issue: issue, workspace_path: workspace_path)
 
         if pull_request.success
-          @tracker_client.add_comment(issue.id, body: "GitHub PR: #{pull_request.url}")
+          @logger.info("Symphony PR created for #{issue.identifier}: #{pull_request.url}")
+
+          begin
+            add_summary_comment(issue.id, result.summary)
+            @logger.info("Symphony added summary comment for #{issue.identifier}")
+          rescue => error
+            @logger.error("Symphony failed to add summary comment for #{issue.identifier}: #{error.class}: #{error.message}")
+          end
+
+          begin
+            @tracker_client.add_comment(issue.id, body: "GitHub PR: #{pull_request.url}")
+            @logger.info("Symphony added PR link comment for #{issue.identifier}")
+          rescue => error
+            @logger.error("Symphony failed to add PR link comment for #{issue.identifier}: #{error.class}: #{error.message}")
+          end
+
           @tracker_client.transition_to_review(issue.id)
           @logger.info("Symphony PR ready for #{issue.identifier}: #{pull_request.url} (state: #{current_state(issue.id)})")
         else
@@ -98,6 +115,42 @@ module Symphony
         ].compact
 
         @logger.info("Symphony card contents for #{issue.identifier}: #{details.join(" ")}")
+      end
+
+      def add_summary_comment(issue_id, summary)
+        return if summary.blank?
+
+        @tracker_client.add_comment(issue_id, body: format_summary_comment(summary))
+      end
+
+      def format_summary_comment(summary)
+        lines = [ "Implementation summary", "", summary.overview ]
+
+        if summary.files_changed.present?
+          lines << ""
+          lines << "Files changed:"
+          summary.files_changed.each do |file|
+            lines << "- #{file}"
+          end
+        end
+
+        if summary.tests_run.present?
+          lines << ""
+          lines << "Tests run:"
+          summary.tests_run.each do |test|
+            lines << "- #{test}"
+          end
+        end
+
+        if summary.notes.present?
+          lines << ""
+          lines << "Notes:"
+          summary.notes.each do |note|
+            lines << "- #{note}"
+          end
+        end
+
+        lines.join("\n")
       end
   end
 end

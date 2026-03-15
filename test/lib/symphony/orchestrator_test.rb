@@ -40,14 +40,16 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
   end
 
   class FakeWorkspaceManager
-    attr_reader :handled_identifiers
+    attr_reader :handled_identifiers, :handled_branch_names
 
     def initialize
       @handled_identifiers = []
+      @handled_branch_names = []
     end
 
-    def create_for_issue(identifier)
+    def create_for_issue(identifier, branch_name: nil)
       @handled_identifiers << identifier
+      @handled_branch_names << branch_name
       OpenStruct.new(path: "/tmp/#{identifier}")
     end
   end
@@ -179,7 +181,7 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
     tracker = FakeTrackerClient.new([ issue ])
     runner = Class.new do
       def run(issue:, prompt:, workspace_path:)
-        OpenStruct.new(success: true, error: nil, stderr: "")
+        OpenStruct.new(success: true, error: nil, stderr: "", summary: nil)
       end
     end.new
 
@@ -199,6 +201,58 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
     assert_equal [ { id: "1", body: "GitHub PR: https://github.com/org/repo/pull/1" } ], tracker.comments
     assert_equal [ "1" ], tracker.transitioned_ids
     assert logger.infos.any? { |message| message.include?("PR ready for CARD-1: https://github.com/org/repo/pull/1 (state: review)") }
+  end
+
+  test "adds structured implementation summary comment before PR comment" do
+    issue = Symphony::Issue.new(id: "1", identifier: "CARD-1", state: "active")
+    logger = TestLogger.new
+    tracker = FakeTrackerClient.new([ issue ])
+    summary = Symphony::AgentRunner::Summary.new(
+      overview: "Updated Symphony to post implementation summaries to cards.",
+      files_changed: [ "lib/symphony/agent_runner.rb", "lib/symphony/orchestrator.rb" ],
+      tests_run: [ "bin/rails test test/lib/symphony/orchestrator_test.rb" ],
+      notes: [ "Falls back to PR-only comments if the summary block is missing." ]
+    )
+    runner = Class.new do
+      define_method(:initialize) { |summary| @summary = summary }
+
+      define_method(:run) do |issue:, prompt:, workspace_path:|
+        OpenStruct.new(success: true, error: nil, stderr: "", summary: @summary)
+      end
+    end.new(summary)
+
+    orchestrator = Symphony::Orchestrator.new(
+      config: OpenStruct.new(max_concurrent_agents: 10, max_turns: 20),
+      workflow_loader: FakeWorkflowLoader.new,
+      tracker_client: tracker,
+      workspace_manager: FakeWorkspaceManager.new,
+      agent_runner: runner,
+      pull_request_creator: FakePullRequestCreator.new(result: OpenStruct.new(success: true, url: "https://github.com/org/repo/pull/1")),
+      logger: logger
+    )
+
+    orchestrator.tick
+
+    assert_equal [ "1" ], tracker.in_progress_ids
+    assert_equal 2, tracker.comments.size
+    assert_equal "1", tracker.comments.first[:id]
+    assert_equal <<~BODY.strip, tracker.comments.first[:body]
+      Implementation summary
+
+      Updated Symphony to post implementation summaries to cards.
+
+      Files changed:
+      - lib/symphony/agent_runner.rb
+      - lib/symphony/orchestrator.rb
+
+      Tests run:
+      - bin/rails test test/lib/symphony/orchestrator_test.rb
+
+      Notes:
+      - Falls back to PR-only comments if the summary block is missing.
+    BODY
+    assert_equal({ id: "1", body: "GitHub PR: https://github.com/org/repo/pull/1" }, tracker.comments.second)
+    assert_equal [ "1" ], tracker.transitioned_ids
   end
 
   class MultiRunner

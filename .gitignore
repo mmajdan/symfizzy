@@ -46,3 +46,7 @@
 .kamal/localhost-cert.pem
 .kamal/localhost-key.pem
 /setvars.sh
+
+/workflows
+
+/local_workflows

@@ -121,6 +121,90 @@ class Symphony::AgentRunnerTest < ActiveSupport::TestCase
     assert_includes argv, "gpt-5"
   end
 
+  test "extracts structured summary from stdout markers" do
+    logger = TestLogger.new
+    runner = Symphony::AgentRunner.new(
+      command: "codex exec --skip-git-repo-check -",
+      model: "gpt-5",
+      logger: logger
+    )
+
+    issue = Symphony::Issue.new(id: "1", identifier: "CARD-1", title: "Test issue")
+
+    original_capture3 = Open3.method(:capture3)
+    original_capture2e = Open3.method(:capture2e)
+    Open3.define_singleton_method(:capture2e) do |command|
+      if command == "codex login status"
+        [ "Logged in using ChatGPT\n", Status.new(0) ]
+      else
+        raise "unexpected command: #{command}"
+      end
+    end
+    Open3.define_singleton_method(:capture3) do |*args, stdin_data:, chdir:|
+      stdout = <<~OUT
+        work log
+        SYMPHONY_SUMMARY_START
+        {"summary":"Updated the card workflow and added tests.","files_changed":["lib/symphony/orchestrator.rb","test/lib/symphony/orchestrator_test.rb"],"tests_run":["bin/rails test test/lib/symphony/orchestrator_test.rb"],"notes":["No migration required."]}
+        SYMPHONY_SUMMARY_END
+      OUT
+
+      [ stdout, "", Status.new(0) ]
+    end
+
+    begin
+      result = runner.run(issue: issue, prompt: "Implement change", workspace_path: Pathname("/tmp/workspace"))
+
+      assert result.success
+      assert_equal "Updated the card workflow and added tests.", result.summary.overview
+      assert_equal [ "lib/symphony/orchestrator.rb", "test/lib/symphony/orchestrator_test.rb" ], result.summary.files_changed
+      assert_equal [ "bin/rails test test/lib/symphony/orchestrator_test.rb" ], result.summary.tests_run
+      assert_equal [ "No migration required." ], result.summary.notes
+    ensure
+      Open3.define_singleton_method(:capture3, original_capture3)
+      Open3.define_singleton_method(:capture2e, original_capture2e)
+    end
+  end
+
+  test "ignores invalid structured summary payload" do
+    logger = TestLogger.new
+    runner = Symphony::AgentRunner.new(
+      command: "codex exec --skip-git-repo-check -",
+      model: "gpt-5",
+      logger: logger
+    )
+
+    issue = Symphony::Issue.new(id: "1", identifier: "CARD-1", title: "Test issue")
+
+    original_capture3 = Open3.method(:capture3)
+    original_capture2e = Open3.method(:capture2e)
+    Open3.define_singleton_method(:capture2e) do |command|
+      if command == "codex login status"
+        [ "Logged in using ChatGPT\n", Status.new(0) ]
+      else
+        raise "unexpected command: #{command}"
+      end
+    end
+    Open3.define_singleton_method(:capture3) do |*args, stdin_data:, chdir:|
+      stdout = <<~OUT
+        SYMPHONY_SUMMARY_START
+        not-json
+        SYMPHONY_SUMMARY_END
+      OUT
+
+      [ stdout, "", Status.new(0) ]
+    end
+
+    begin
+      result = runner.run(issue: issue, prompt: "Implement change", workspace_path: Pathname("/tmp/workspace"))
+
+      assert result.success
+      assert_nil result.summary
+    ensure
+      Open3.define_singleton_method(:capture3, original_capture3)
+      Open3.define_singleton_method(:capture2e, original_capture2e)
+    end
+  end
+
   test "falls back to api key when chatgpt login fails for auth reasons" do
     ENV["OPENAI_API_KEY"] = "test-key"
     logger = TestLogger.new

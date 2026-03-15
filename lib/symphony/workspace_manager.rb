@@ -18,13 +18,18 @@ module Symphony
       @github_token = github_token.to_s
     end
 
-    def create_for_issue(identifier)
-      @root.mkpath
-      key, path = build_workspace_path(identifier)
-      ensure_checkout(path)
+      def create_for_issue(identifier, branch_name: nil)
+        @root.mkpath
+        key, path = build_workspace_path(identifier)
+        ensure_checkout(path)
 
-      Workspace.new(path: path, workspace_key: key, created_now: true)
-    end
+        # If branch_name provided (e.g., from rework state), try to checkout existing branch
+        if branch_name.present?
+          checkout_branch_if_exists(path, branch_name)
+        end
+
+        Workspace.new(path: path, workspace_key: key, created_now: true)
+      end
 
     def remove_for_issue(identifier)
       workspace_prefix = workspace_prefix_for(identifier)
@@ -97,7 +102,7 @@ module Symphony
         token = workflow_token.presence || @github_token
         username = username.to_s.strip
         token = token.to_s.strip
-        username.empty? || token.empty? ? nil : [username, token]
+        username.empty? || token.empty? ? nil : [ username, token ]
       end
 
       def workflow_repo
@@ -136,6 +141,39 @@ module Symphony
 
       def workspace_prefix_for(identifier)
         sanitize_identifier(identifier)
+      end
+
+      def checkout_branch_if_exists(path, branch_name)
+        sanitized_branch = sanitize_identifier(branch_name)
+
+        # Check if branch exists on origin
+        output, status = Open3.capture2e("git ls-remote --heads origin #{Shellwords.escape(sanitized_branch)}", chdir: path.to_s)
+
+        if status.success? && output.include?(sanitized_branch)
+          @logger&.info("WorkspaceManager: Found existing branch '#{sanitized_branch}' on origin, checking out...")
+
+          # Fetch the branch
+          fetch_output, fetch_status = Open3.capture2e("git fetch origin #{Shellwords.escape(sanitized_branch)}:#{Shellwords.escape(sanitized_branch)}", chdir: path.to_s)
+
+          if fetch_status.success?
+            # Checkout the branch
+            checkout_output, checkout_status = Open3.capture2e("git checkout #{Shellwords.escape(sanitized_branch)}", chdir: path.to_s)
+
+            if checkout_status.success?
+              @logger&.info("WorkspaceManager: Successfully checked out branch '#{sanitized_branch}'")
+              true
+            else
+              @logger&.warn("WorkspaceManager: Failed to checkout branch '#{sanitized_branch}': #{checkout_output.strip}")
+              false
+            end
+          else
+            @logger&.warn("WorkspaceManager: Failed to fetch branch '#{sanitized_branch}': #{fetch_output.strip}")
+            false
+          end
+        else
+          @logger&.info("WorkspaceManager: Branch '#{sanitized_branch}' does not exist on origin, staying on default branch")
+          false
+        end
       end
   end
 end

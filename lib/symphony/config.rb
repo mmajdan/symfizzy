@@ -125,6 +125,10 @@ module Symphony
       resolve_env(runner_value_for("model_provider", optional: true)).presence || DEFAULTS.dig("runner", "model_provider")
     end
 
+    def runner_env_vars
+      value_for("runner", "env", optional: true) || {}
+    end
+
     def github_repo
       resolve_env(value_for("github", "repo"))
     end

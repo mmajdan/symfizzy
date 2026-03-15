@@ -4,14 +4,18 @@ require "shellwords"
 
 module Symphony
   class AgentRunner
-    Result = Struct.new(:success, :status, :stdout, :stderr, :error, :auth_mode, keyword_init: true)
+    SUMMARY_START_MARKER = "SYMPHONY_SUMMARY_START".freeze
+    SUMMARY_END_MARKER = "SYMPHONY_SUMMARY_END".freeze
+
+    Summary = Struct.new(:overview, :files_changed, :tests_run, :notes, keyword_init: true)
+    Result = Struct.new(:success, :status, :stdout, :stderr, :error, :auth_mode, :summary, keyword_init: true)
     CHATGPT_LOGIN_MODE = "chatgpt_login".freeze
     API_KEY_MODE = "api_key".freeze
     UNKNOWN_AUTH_MODE = "unknown".freeze
     CODEX_CLI = "codex".freeze
     OPENCODE_CLI = "opencode".freeze
 
-    def initialize(command:, model: nil, base_url: nil, auth_strategy: "login_then_api_key", api_key: nil, api_key_env: "OPENAI_API_KEY", wire_api: "responses", model_provider: "symphony_openai_compatible", logger: Rails.logger)
+    def initialize(command:, model: nil, base_url: nil, auth_strategy: "login_then_api_key", api_key: nil, api_key_env: "OPENAI_API_KEY", wire_api: "responses", model_provider: "symphony_openai_compatible", env_vars: {}, logger: Rails.logger)
       @command = command
       @model = model
       @base_url = base_url
@@ -20,6 +24,7 @@ module Symphony
       @api_key_env = api_key_env
       @wire_api = wire_api
       @model_provider = model_provider
+      @env_vars = env_vars
       @logger = logger
     end
 
@@ -48,12 +53,13 @@ module Symphony
 
     private
       def runner_env(issue:, prompt:)
-        {
-          "SYMPHONY_ISSUE_ID" => issue.id,
+        base_env = @env_vars.to_h.transform_keys(&:to_s).transform_values(&:to_s)
+        base_env.merge({
+          "SYMPHONY_ISSUE_ID" => issue.id.to_s,
           "SYMPHONY_ISSUE_IDENTIFIER" => issue.identifier,
           "SYMPHONY_ISSUE_TITLE" => issue.title,
           "SYMPHONY_PROMPT" => prompt
-        }
+        })
       end
 
       def run_command(env:, argv:, prompt:, workspace_path:, auth_mode:)
@@ -65,7 +71,14 @@ module Symphony
           chdir: workspace_path.to_s
         )
 
-        Result.new(success: status.success?, status: status.exitstatus, stdout: stdout, stderr: stderr, auth_mode: auth_mode)
+        Result.new(
+          success: status.success?,
+          status: status.exitstatus,
+          stdout: stdout,
+          stderr: stderr,
+          auth_mode: auth_mode,
+          summary: extract_summary(stdout)
+        )
       end
 
       def command_input(argv, prompt)
@@ -171,6 +184,37 @@ module Symphony
 
       def runner_name
         @runner_name ||= Shellwords.split(@command).first.to_s
+      end
+
+      def extract_summary(stdout)
+        payload = extract_summary_payload(stdout)
+        return if payload.blank?
+
+        parsed = JSON.parse(payload)
+        return unless parsed.is_a?(Hash)
+
+        overview = parsed["summary"].to_s.strip.presence || parsed["overview"].to_s.strip.presence
+        return if overview.blank?
+
+        Summary.new(
+          overview: overview,
+          files_changed: string_list(parsed["files_changed"]),
+          tests_run: string_list(parsed["tests_run"]),
+          notes: string_list(parsed["notes"])
+        )
+      rescue JSON::ParserError
+        nil
+      end
+
+      def extract_summary_payload(stdout)
+        return if stdout.blank?
+
+        pattern = /#{Regexp.escape(SUMMARY_START_MARKER)}\s*(\{.*?\})\s*#{Regexp.escape(SUMMARY_END_MARKER)}/m
+        stdout[pattern, 1]
+      end
+
+      def string_list(value)
+        Array(value).filter_map { |item| item.to_s.strip.presence }
       end
   end
 end

@@ -50,6 +50,7 @@ module Symphony
             api_key_env: @config.runner_api_key_env,
             wire_api: @config.runner_wire_api,
             model_provider: @config.runner_model_provider,
+            env_vars: @config.runner_env_vars,
             logger: @logger
           ),
           pull_request_creator: PullRequestCreator.new(repo: @config.github_repo, base_branch: @config.github_base),
