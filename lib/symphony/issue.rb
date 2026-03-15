@@ -12,6 +12,8 @@ module Symphony
     :blocked_by,
     :created_at,
     :updated_at,
+    :pr_url,
+    :comments,
     keyword_init: true
   ) do
     def to_template_payload
@@ -27,7 +29,9 @@ module Symphony
         "labels" => labels,
         "blocked_by" => blocked_by,
         "created_at" => created_at,
-        "updated_at" => updated_at
+        "updated_at" => updated_at,
+        "pr_url" => pr_url,
+        "comments" => comments
       }
     end
   end

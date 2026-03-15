@@ -76,4 +76,54 @@ class Symphony::PullRequestCreatorTest < ActiveSupport::TestCase
     assert_not result.success
     assert_equal "No changes produced in workspace", result.error
   end
+
+  test "updates existing PR when issue has pr_url (rework scenario)" do
+    creator = Symphony::PullRequestCreator.new(repo: "org/repo", base_branch: "main")
+    existing_pr_url = "https://github.com/org/repo/pull/42"
+    issue = Symphony::Issue.new(
+      identifier: "CARD-6",
+      title: "PRD init",
+      branch_name: "card-6",
+      pr_url: existing_pr_url
+    )
+    commands = []
+
+    original_capture2e = Open3.method(:capture2e)
+    Open3.define_singleton_method(:capture2e) do |command, chdir:|
+      commands << command
+
+      case command
+      when "git rev-parse --verify origin/main"
+        [ "origin/main\n", Status.new(0) ]
+      when "git checkout -B card-6"
+        [ "", Status.new(0) ]
+      when "git add -A"
+        [ "", Status.new(0) ]
+      when "git status --porcelain"
+        [ "M  file.txt\n", Status.new(0) ]
+      when /git commit -m CARD-6/
+        [ "", Status.new(0) ]
+      when "git rev-list --count origin/main..HEAD"
+        [ "3\n", Status.new(0) ]
+      when "git push -u origin card-6"
+        [ "", Status.new(0) ]
+      when /gh pr edit/
+        [ "", Status.new(0) ]
+      else
+        raise "Unexpected command: #{command}"
+      end
+    end
+
+    begin
+      result = creator.create_for(issue: issue, workspace_path: Rails.root)
+    ensure
+      Open3.define_singleton_method(:capture2e, original_capture2e)
+    end
+
+    assert_predicate result, :success
+    assert_equal existing_pr_url, result.url
+    assert commands.any? { |cmd| cmd.include?("gh pr edit") }
+    assert commands.any? { |cmd| cmd.include?(existing_pr_url) }
+    assert_not commands.any? { |cmd| cmd.include?("gh pr create") }
+  end
 end

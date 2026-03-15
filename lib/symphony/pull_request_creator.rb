@@ -36,22 +36,36 @@ module Symphony
 
       with_workspace_git(workspace_path, "push -u origin #{Shellwords.escape(branch)}")
 
-      cmd = [
-        "gh pr create",
-        "--repo", Shellwords.escape(@repo),
-        "--base", Shellwords.escape(@base_branch),
-        "--head", Shellwords.escape(branch),
-        "--title", Shellwords.escape(title),
-        "--body", Shellwords.escape(body)
-      ].join(" ")
+      if issue.pr_url.present?
+        # Update existing PR for rework cards
+        cmd = [
+          "gh pr edit",
+          Shellwords.escape(issue.pr_url),
+          "--title", Shellwords.escape(title),
+          "--body", Shellwords.escape(body)
+        ].join(" ")
 
-      output = run_command!(workspace_path, cmd)
-      url = output.lines.last&.strip.presence
-
-      if url.present?
-        Result.new(success: true, url: url)
+        run_command!(workspace_path, cmd)
+        Result.new(success: true, url: issue.pr_url)
       else
-        Result.new(success: false, error: "GitHub PR creation did not return a URL")
+        # Create new PR
+        cmd = [
+          "gh pr create",
+          "--repo", Shellwords.escape(@repo),
+          "--base", Shellwords.escape(@base_branch),
+          "--head", Shellwords.escape(branch),
+          "--title", Shellwords.escape(title),
+          "--body", Shellwords.escape(body)
+        ].join(" ")
+
+        output = run_command!(workspace_path, cmd)
+        url = output.lines.last&.strip.presence
+
+        if url.present?
+          Result.new(success: true, url: url)
+        else
+          Result.new(success: false, error: "GitHub PR creation did not return a URL")
+        end
       end
     rescue => error
       Result.new(success: false, error: error.message)

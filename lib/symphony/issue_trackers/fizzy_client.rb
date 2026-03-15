@@ -102,8 +102,26 @@ module Symphony
             labels: card.tags.map { |tag| tag.title.downcase },
             blocked_by: [],
             created_at: card.created_at,
-            updated_at: card.updated_at
+            updated_at: card.updated_at,
+            pr_url: extract_pr_url(card),
+            comments: extract_comments(card)
           )
+        end
+
+        def extract_pr_url(card)
+          # Look for GitHub PR URL in card comments
+          card.comments.each do |comment|
+            body = comment.body.to_plain_text
+            if match = body.match(%r{https://github\.com/[^/]+/[^/]+/pull/\d+})
+              return match[0]
+            end
+          end
+          nil
+        end
+
+        def extract_comments(card)
+          # Extract all card comments as array of strings
+          card.comments.map { |c| c.body.to_plain_text }.reject(&:blank?)
         end
 
         def state_for(card)
