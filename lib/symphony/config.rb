@@ -85,7 +85,11 @@ module Symphony
     end
 
     def telemetry_log_path
-      Pathname(resolve_env(value_for("telemetry", "log_path"))).expand_path
+      configured_path = value_for("telemetry", "log_path")
+      resolved_path = resolve_env(configured_path)
+      resolved_path = DEFAULTS.dig("telemetry", "log_path") if env_reference?(configured_path) && resolved_path.blank?
+
+      Pathname(resolved_path).expand_path
     end
 
     def max_concurrent_agents
@@ -211,6 +215,10 @@ module Symphony
         else
           value_for("runner", key, optional: optional)
         end
+      end
+
+      def env_reference?(value)
+        value.is_a?(String) && value.start_with?("$")
       end
 
       def resolve_env(value)
