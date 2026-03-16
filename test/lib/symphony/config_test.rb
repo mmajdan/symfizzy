@@ -98,6 +98,18 @@ class Symphony::ConfigTest < ActiveSupport::TestCase
     ENV.delete("SYMPHONY_TEST_TELEMETRY_LOG_PATH")
   end
 
+  test "falls back to default telemetry log path when env-backed override is unset" do
+    ENV.delete("SYMPHONY_TEST_TELEMETRY_LOG_PATH")
+
+    config = Symphony::Config.new({
+      "tracker" => { "account_id" => "1234567" },
+      "github" => { "repo" => "mmajdan/fizzy" },
+      "telemetry" => { "log_path" => "$SYMPHONY_TEST_TELEMETRY_LOG_PATH" }
+    })
+
+    assert_equal Pathname(File.join(Dir.tmpdir, "symphony_workspaces", "telemetry.log")).expand_path, config.telemetry_log_path
+  end
+
   test "requires fizzy account id" do
     config = Symphony::Config.new({})
 

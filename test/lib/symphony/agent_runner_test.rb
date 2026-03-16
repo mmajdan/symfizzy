@@ -19,6 +19,18 @@ class Symphony::AgentRunnerTest < ActiveSupport::TestCase
     end
   end
 
+  class TestTelemetryLogger
+    attr_reader :events
+
+    def initialize
+      @events = []
+    end
+
+    def event(**payload)
+      @events << payload
+    end
+  end
+
   test "adds codex provider overrides when base url is configured" do
     ENV["CUSTOM_OPENAI_API_KEY"] = "test-key"
     logger = TestLogger.new
@@ -414,5 +426,76 @@ class Symphony::AgentRunnerTest < ActiveSupport::TestCase
     end
 
     assert_equal [ "Symphony agent auth for CARD-1 via opencode: chatgpt_login" ], logger.infos
+  end
+
+  test "telemetry redacts stdin prompt for codex command logging" do
+    logger = TestLogger.new
+    telemetry = TestTelemetryLogger.new
+    runner = Symphony::AgentRunner.new(
+      command: "codex exec --skip-git-repo-check -",
+      auth_strategy: "api_key_only",
+      api_key: "literal-key",
+      telemetry_logger: telemetry,
+      logger: logger
+    )
+
+    issue = Symphony::Issue.new(id: "1", identifier: "CARD-1", title: "Test issue")
+
+    original_capture3 = Open3.method(:capture3)
+    original_capture2e = Open3.method(:capture2e)
+    Open3.define_singleton_method(:capture2e) do |command|
+      raise "login status should not be checked: #{command}"
+    end
+    Open3.define_singleton_method(:capture3) do |*args, stdin_data:, chdir:|
+      [ "stdout", "", Status.new(0) ]
+    end
+
+    begin
+      result = runner.run(issue: issue, prompt: "Sensitive prompt data", workspace_path: Pathname("/tmp/workspace"))
+
+      assert result.success
+    ensure
+      Open3.define_singleton_method(:capture3, original_capture3)
+      Open3.define_singleton_method(:capture2e, original_capture2e)
+    end
+
+    start_event = telemetry.events.find { |event| event[:name] == "symphony.agent.command.start" }
+    assert_equal "codex exec --skip-git-repo-check - [stdin redacted]", start_event[:attributes][:command]
+  end
+
+  test "telemetry does not include appended opencode prompt in command logging" do
+    logger = TestLogger.new
+    telemetry = TestTelemetryLogger.new
+    runner = Symphony::AgentRunner.new(
+      command: "opencode run --format json",
+      auth_strategy: "api_key_only",
+      api_key: "literal-key",
+      telemetry_logger: telemetry,
+      logger: logger
+    )
+
+    issue = Symphony::Issue.new(id: "1", identifier: "CARD-1", title: "Test issue")
+
+    original_capture3 = Open3.method(:capture3)
+    original_capture2e = Open3.method(:capture2e)
+    Open3.define_singleton_method(:capture2e) do |command|
+      raise "login status should not be checked: #{command}"
+    end
+    Open3.define_singleton_method(:capture3) do |*args, stdin_data:, chdir:|
+      [ "stdout", "", Status.new(0) ]
+    end
+
+    begin
+      result = runner.run(issue: issue, prompt: "Sensitive prompt data", workspace_path: Pathname("/tmp/workspace"))
+
+      assert result.success
+    ensure
+      Open3.define_singleton_method(:capture3, original_capture3)
+      Open3.define_singleton_method(:capture2e, original_capture2e)
+    end
+
+    start_event = telemetry.events.find { |event| event[:name] == "symphony.agent.command.start" }
+    assert_equal "opencode run --format json", start_event[:attributes][:command]
+    assert_no_match(/Sensitive prompt data/, start_event[:attributes][:command])
   end
 end
