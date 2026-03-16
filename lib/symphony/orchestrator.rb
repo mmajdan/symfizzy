@@ -2,7 +2,7 @@ require "set"
 
 module Symphony
   class Orchestrator
-    def initialize(config:, workflow_loader:, tracker_client:, workspace_manager:, agent_runner:, pull_request_creator:, logger: Rails.logger)
+    def initialize(config:, workflow_loader:, tracker_client:, workspace_manager:, agent_runner:, pull_request_creator:, logger: Rails.logger, telemetry_logger: nil)
       @config = config
       @workflow_loader = workflow_loader
       @tracker_client = tracker_client
@@ -10,6 +10,7 @@ module Symphony
       @agent_runner = agent_runner
       @pull_request_creator = pull_request_creator
       @logger = logger
+      @telemetry_logger = telemetry_logger
       @running = {}
       @claimed = Set.new
       @mutex = Mutex.new
@@ -50,15 +51,18 @@ module Symphony
         end
 
         @logger.info("Symphony picking up #{issue.identifier} (state: #{issue.state})")
+        emit_telemetry("symphony.issue.pickup", issue: issue, body: "Card picked up by orchestrator")
         log_issue_contents(issue)
         @tracker_client.transition_to_in_progress(issue.id)
         @logger.info("Symphony moved #{issue.identifier} to In Progress (state: #{current_state(issue.id)})")
+        emit_telemetry("symphony.issue.transition", issue: issue, body: "Moved to In Progress", attributes: { target_state: "active" })
 
         # If issue is in rework state, checkout existing branch
         branch_name = issue.state == "rework" ? issue.branch_name : nil
         @logger.info("Symphony creating workspace for #{issue.identifier}...")
         workspace = @workspace_manager.create_for_issue(issue.identifier, branch_name: branch_name)
         @logger.info("Symphony workspace created for #{issue.identifier} at #{workspace.path}")
+        emit_telemetry("symphony.workspace.checkout", issue: issue, body: "Repository checked out", attributes: { workspace_path: workspace.path.to_s })
         prompt = PromptRenderer.new.render(
           template: workflow.prompt_template,
           issue: issue,
@@ -68,6 +72,7 @@ module Symphony
         )
 
         @logger.info("Symphony implementing #{issue.identifier} in #{workspace.path}")
+        emit_telemetry("symphony.agent.start", issue: issue, body: "Agent run started")
 
         # Run agent asynchronously in a separate thread
         Thread.new do
@@ -76,9 +81,11 @@ module Symphony
 
             if result.success
               @logger.info("Symphony implementation finished for #{issue.identifier}; creating PR")
+              emit_telemetry("symphony.agent.finish", issue: issue, body: "Agent run finished", attributes: { success: true })
               handle_success(issue, workspace.path, result)
             else
               @logger.error("Symphony implementation failed for #{issue.identifier} (state: #{current_state(issue.id)}): #{result.error || result.stderr}")
+              emit_telemetry("symphony.agent.finish", issue: issue, body: "Agent run failed", severity_text: "ERROR", attributes: { success: false, error: result.error || result.stderr })
             end
           rescue => error
             @logger.error("Symphony agent thread failed for #{issue.identifier}: #{error.class}: #{error.message}")
@@ -97,6 +104,7 @@ module Symphony
 
         if pull_request.success
           @logger.info("Symphony PR created for #{issue.identifier}: #{pull_request.url}")
+          emit_telemetry("symphony.pull_request.created", issue: issue, body: "PR created", attributes: { pr_url: pull_request.url })
 
           begin
             add_summary_comment(issue.id, result.summary)
@@ -116,6 +124,7 @@ module Symphony
           @logger.info("Symphony PR ready for #{issue.identifier}: #{pull_request.url} (state: #{current_state(issue.id)})")
         else
           @logger.error("Symphony implementation finished for #{issue.identifier} but PR creation failed (state: #{current_state(issue.id)}): #{pull_request.error}")
+          emit_telemetry("symphony.pull_request.failed", issue: issue, body: "PR creation failed", severity_text: "ERROR", attributes: { error: pull_request.error })
         end
       end
 
@@ -134,6 +143,17 @@ module Symphony
         ].compact
 
         @logger.info("Symphony card contents for #{issue.identifier}: #{details.join(" ")}")
+      end
+
+
+      def emit_telemetry(name, issue:, body:, severity_text: "INFO", attributes: {})
+        @telemetry_logger&.event(
+          name: name,
+          issue: issue,
+          body: body,
+          severity_text: severity_text,
+          attributes: attributes
+        )
       end
 
       def add_summary_comment(issue_id, summary)

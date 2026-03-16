@@ -14,6 +14,9 @@ module Symphony
       "workspace" => {
         "root" => File.join(Dir.tmpdir, "symphony_workspaces")
       },
+      "telemetry" => {
+        "log_path" => File.join(Dir.tmpdir, "symphony_workspaces", "telemetry.log")
+      },
       "agent" => {
         "max_concurrent_agents" => 10,
         "max_retry_backoff_ms" => 300_000,
@@ -79,6 +82,10 @@ module Symphony
 
     def workspace_root
       Pathname(resolve_env(value_for("workspace", "root"))).expand_path
+    end
+
+    def telemetry_log_path
+      Pathname(resolve_env(value_for("telemetry", "log_path"))).expand_path
     end
 
     def max_concurrent_agents

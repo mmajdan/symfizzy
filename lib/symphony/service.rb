@@ -1,3 +1,4 @@
+require "symphony/telemetry_logger"
 module Symphony
   class Service
     puts "DEBUG: Symphony::Service loading"
@@ -44,6 +45,8 @@ module Symphony
           terminal_states: @config.tracker_terminal_states
         )
 
+        telemetry_logger = TelemetryLogger.new(log_path: @config.telemetry_log_path, logger: @logger)
+
         Orchestrator.new(
           config: @config,
           workflow_loader: @workflow_loader,
@@ -65,10 +68,12 @@ module Symphony
             wire_api: @config.runner_wire_api,
             model_provider: @config.runner_model_provider,
             env_vars: @config.runner_env_vars,
-            logger: @logger
+            logger: @logger,
+            telemetry_logger: telemetry_logger
           ),
           pull_request_creator: PullRequestCreator.new(repo: @config.github_repo, base_branch: @config.github_base),
-          logger: @logger
+          logger: @logger,
+          telemetry_logger: telemetry_logger
         )
       end
   end

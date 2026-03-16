@@ -75,6 +75,29 @@ class Symphony::ConfigTest < ActiveSupport::TestCase
     assert_nil config.tracker_active_column_names
   end
 
+
+  test "uses telemetry log path default" do
+    config = Symphony::Config.new({
+      "tracker" => { "account_id" => "1234567" },
+      "github" => { "repo" => "mmajdan/fizzy" }
+    })
+
+    assert_equal Pathname(File.join(Dir.tmpdir, "symphony_workspaces", "telemetry.log")).expand_path, config.telemetry_log_path
+  end
+
+  test "resolves telemetry log path from environment" do
+    ENV["SYMPHONY_TEST_TELEMETRY_LOG_PATH"] = "/tmp/custom-telemetry.log"
+    config = Symphony::Config.new({
+      "tracker" => { "account_id" => "1234567" },
+      "github" => { "repo" => "mmajdan/fizzy" },
+      "telemetry" => { "log_path" => "$SYMPHONY_TEST_TELEMETRY_LOG_PATH" }
+    })
+
+    assert_equal Pathname("/tmp/custom-telemetry.log").expand_path, config.telemetry_log_path
+  ensure
+    ENV.delete("SYMPHONY_TEST_TELEMETRY_LOG_PATH")
+  end
+
   test "requires fizzy account id" do
     config = Symphony::Config.new({})
 

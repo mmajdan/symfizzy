@@ -15,7 +15,7 @@ module Symphony
     CODEX_CLI = "codex".freeze
     OPENCODE_CLI = "opencode".freeze
 
-    def initialize(command:, model: nil, base_url: nil, auth_strategy: "login_then_api_key", api_key: nil, api_key_env: "OPENAI_API_KEY", wire_api: "responses", model_provider: "symphony_openai_compatible", env_vars: {}, logger: Rails.logger)
+    def initialize(command:, model: nil, base_url: nil, auth_strategy: "login_then_api_key", api_key: nil, api_key_env: "OPENAI_API_KEY", wire_api: "responses", model_provider: "symphony_openai_compatible", env_vars: {}, logger: Rails.logger, telemetry_logger: nil)
       @command = command
       @model = model
       @base_url = base_url
@@ -26,6 +26,7 @@ module Symphony
       @model_provider = model_provider
       @env_vars = env_vars
       @logger = logger
+      @telemetry_logger = telemetry_logger
     end
 
     def run(issue:, prompt:, workspace_path:)
@@ -33,21 +34,22 @@ module Symphony
 
       if prefer_login_auth?
         @logger.info("Symphony agent auth for #{issue.identifier} via #{runner_name}: #{CHATGPT_LOGIN_MODE}")
-        result = run_command(env:, argv: login_command_argv, prompt:, workspace_path:, auth_mode: CHATGPT_LOGIN_MODE)
+        result = run_command(issue:, env:, argv: login_command_argv, prompt:, workspace_path:, auth_mode: CHATGPT_LOGIN_MODE)
         return result if result.success || !fallback_to_api_key?(result)
 
         @logger.info("Symphony agent auth fallback for #{issue.identifier} via #{runner_name}: #{API_KEY_MODE}")
-        return run_command(env: api_key_env(env), argv: api_key_command_argv, prompt:, workspace_path:, auth_mode: API_KEY_MODE)
+        return run_command(issue:, env: api_key_env(env), argv: api_key_command_argv, prompt:, workspace_path:, auth_mode: API_KEY_MODE)
       end
 
       if prefer_api_key_auth?
         @logger.info("Symphony agent auth for #{issue.identifier} via #{runner_name}: #{API_KEY_MODE}")
-        return run_command(env: api_key_env(env), argv: api_key_command_argv, prompt:, workspace_path:, auth_mode: API_KEY_MODE)
+        return run_command(issue:, env: api_key_env(env), argv: api_key_command_argv, prompt:, workspace_path:, auth_mode: API_KEY_MODE)
       end
 
       @logger.info("Symphony agent auth for #{issue.identifier} via #{runner_name}: default_cli")
-      run_command(env:, argv: login_command_argv, prompt:, workspace_path:, auth_mode: UNKNOWN_AUTH_MODE)
+      run_command(issue:, env:, argv: login_command_argv, prompt:, workspace_path:, auth_mode: UNKNOWN_AUTH_MODE)
     rescue => error
+      @telemetry_logger&.event(name: "symphony.agent.command.exception", issue: issue, body: "Runner raised an exception", severity_text: "ERROR", attributes: { error_class: error.class.name, error_message: error.message })
       Result.new(success: false, status: nil, stdout: "", stderr: "", error: error.message, auth_mode: UNKNOWN_AUTH_MODE)
     end
 
@@ -62,9 +64,16 @@ module Symphony
         })
       end
 
-      def run_command(env:, argv:, prompt:, workspace_path:, auth_mode:)
+      def run_command(issue:, env:, argv:, prompt:, workspace_path:, auth_mode:)
         command_argv, stdin_data = command_input(argv, prompt)
         stdout, stderr, status = nil
+
+        @telemetry_logger&.event(
+          name: "symphony.agent.command.start",
+          issue: issue,
+          body: "Agent command started",
+          attributes: { auth_mode: auth_mode, command: command_argv.join(" ") }
+        )
 
         Timeout.timeout(600) do  # 10 minutes timeout for agent runs
           stdout, stderr, status = Open3.capture3(
@@ -75,7 +84,7 @@ module Symphony
           )
         end
 
-        Result.new(
+        result = Result.new(
           success: status.success?,
           status: status.exitstatus,
           stdout: stdout,
@@ -83,6 +92,16 @@ module Symphony
           auth_mode: auth_mode,
           summary: extract_summary(stdout)
         )
+
+        @telemetry_logger&.event(
+          name: "symphony.agent.command.finish",
+          issue: issue,
+          body: "Agent command finished",
+          severity_text: result.success ? "INFO" : "ERROR",
+          attributes: { auth_mode: auth_mode, success: result.success, exit_status: result.status }
+        )
+
+        result
       end
 
       def command_input(argv, prompt)
