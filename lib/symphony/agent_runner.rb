@@ -72,7 +72,7 @@ module Symphony
           name: "symphony.agent.command.start",
           issue: issue,
           body: "Agent command started",
-          attributes: { auth_mode: auth_mode, command: command_argv.join(" ") }
+          attributes: { auth_mode: auth_mode, command: telemetry_command(argv, stdin_data) }
         )
 
         Timeout.timeout(600) do  # 10 minutes timeout for agent runs
@@ -110,6 +110,11 @@ module Symphony
         else
           [ argv, prompt ]
         end
+      end
+
+      def telemetry_command(argv, stdin_data)
+        command = argv.join(" ")
+        stdin_data.present? ? "#{command} [stdin redacted]" : command
       end
 
       def login_command_argv
