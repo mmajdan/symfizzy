@@ -20,6 +20,18 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
     end
   end
 
+  class TestTelemetryLogger
+    attr_reader :events
+
+    def initialize
+      @events = []
+    end
+
+    def event(**payload)
+      @events << payload
+    end
+  end
+
   class FailingAgentRunner
     def run(issue:, prompt:, workspace_path:)
       raise "boom for #{issue.identifier}"
@@ -136,6 +148,8 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
 
     orchestrator.tick
 
+    wait_until { recording_runner.handled_ids == [ "2" ] }
+
     assert_equal [ "2" ], recording_runner.handled_ids
     assert_equal [ "1", "2" ], tracker.in_progress_ids
     assert_empty tracker.comments
@@ -168,6 +182,8 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
 
     orchestrator.tick
 
+    wait_until { logger.errors.any? { |message| message.include?("No changes produced in workspace") } }
+
     assert_equal [ "1" ], tracker.in_progress_ids
     assert_empty tracker.comments
     assert_empty tracker.transitioned_ids
@@ -197,9 +213,12 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
 
     orchestrator.tick
 
+    wait_until { tracker.comments.present? && tracker.transitioned_ids.present? }
+
     assert_equal [ "1" ], tracker.in_progress_ids
     assert_equal [ { id: "1", body: "GitHub PR: https://github.com/org/repo/pull/1" } ], tracker.comments
     assert_equal [ "1" ], tracker.transitioned_ids
+    assert logger.infos.any? { |message| message.include?("skipped summary comment for CARD-1") }
     assert logger.infos.any? { |message| message.include?("PR ready for CARD-1: https://github.com/org/repo/pull/1 (state: review)") }
   end
 
@@ -233,6 +252,8 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
 
     orchestrator.tick
 
+    wait_until { tracker.comments.size == 2 && tracker.transitioned_ids == [ "1" ] }
+
     assert_equal [ "1" ], tracker.in_progress_ids
     assert_equal 2, tracker.comments.size
     assert_equal "1", tracker.comments.first[:id]
@@ -255,6 +276,49 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
     assert_equal [ "1" ], tracker.transitioned_ids
   end
 
+  test "emits rendered agent prompt to telemetry for rework issues" do
+    issue = Symphony::Issue.new(
+      id: "1",
+      identifier: "CARD-1",
+      title: "Prompt test",
+      state: "rework",
+      pr_url: "https://github.com/org/repo/pull/1",
+      comments: [ "Please update the README", "Adjust the script output" ]
+    )
+    telemetry = TestTelemetryLogger.new
+    tracker = FakeTrackerClient.new([ issue ])
+    runner = Class.new do
+      def run(issue:, prompt:, workspace_path:)
+        OpenStruct.new(success: false, error: nil, stderr: "stop after prompt")
+      end
+    end.new
+    workflow_loader = Class.new do
+      def load
+        OpenStruct.new(prompt_template: "State {{ issue.state }} PR {{ issue.pr_url }} Comments {{ issue.comments }}")
+      end
+    end.new
+
+    orchestrator = Symphony::Orchestrator.new(
+      config: OpenStruct.new(max_concurrent_agents: 10, max_turns: 20),
+      workflow_loader: workflow_loader,
+      tracker_client: tracker,
+      workspace_manager: FakeWorkspaceManager.new,
+      agent_runner: runner,
+      pull_request_creator: FakePullRequestCreator.new,
+      telemetry_logger: telemetry
+    )
+
+    orchestrator.tick
+
+    wait_until { telemetry.events.any? { |event| event[:name] == "symphony.agent.prompt" } }
+
+    prompt_event = telemetry.events.find { |event| event[:name] == "symphony.agent.prompt" }
+    assert prompt_event.present?
+    assert_equal issue.id, prompt_event[:issue].id
+    assert_includes prompt_event.dig(:attributes, :prompt), issue.pr_url
+    assert_includes prompt_event.dig(:attributes, :prompt), "Please update the README"
+  end
+
   class MultiRunner
     def initialize(runners)
       @runners = runners
@@ -264,4 +328,18 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
       @runners.fetch(issue.identifier).run(issue: issue, prompt: prompt, workspace_path: workspace_path)
     end
   end
+
+  private
+    def wait_until(timeout: 1)
+      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+
+      loop do
+        return if yield
+        break if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+
+        sleep 0.01
+      end
+
+      flunk "Condition not met within #{timeout} seconds"
+    end
 end

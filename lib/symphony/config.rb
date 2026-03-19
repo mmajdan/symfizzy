@@ -6,6 +6,7 @@ module Symphony
       "tracker" => {
         "kind" => "fizzy",
         "active_states" => [ "active" ],
+        "active_column_names" => [ "Todo", "Rework" ],
         "terminal_states" => [ "closed", "not_now", "done" ]
       },
       "polling" => {

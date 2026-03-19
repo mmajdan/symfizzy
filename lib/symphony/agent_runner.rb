@@ -1,5 +1,6 @@
 require "json"
 require "open3"
+require "fileutils"
 require "shellwords"
 
 module Symphony
@@ -8,7 +9,7 @@ module Symphony
     SUMMARY_END_MARKER = "SYMPHONY_SUMMARY_END".freeze
 
     Summary = Struct.new(:overview, :files_changed, :tests_run, :notes, keyword_init: true)
-    Result = Struct.new(:success, :status, :stdout, :stderr, :error, :auth_mode, :summary, keyword_init: true)
+    Result = Struct.new(:success, :status, :stdout, :stderr, :error, :auth_mode, :summary, :output_paths, :summary_status, keyword_init: true)
     CHATGPT_LOGIN_MODE = "chatgpt_login".freeze
     API_KEY_MODE = "api_key".freeze
     UNKNOWN_AUTH_MODE = "unknown".freeze
@@ -50,7 +51,7 @@ module Symphony
       run_command(issue:, env:, argv: login_command_argv, prompt:, workspace_path:, auth_mode: UNKNOWN_AUTH_MODE)
     rescue => error
       @telemetry_logger&.event(name: "symphony.agent.command.exception", issue: issue, body: "Runner raised an exception", severity_text: "ERROR", attributes: { error_class: error.class.name, error_message: error.message })
-      Result.new(success: false, status: nil, stdout: "", stderr: "", error: error.message, auth_mode: UNKNOWN_AUTH_MODE)
+      Result.new(success: false, status: nil, stdout: "", stderr: "", error: error.message, auth_mode: UNKNOWN_AUTH_MODE, output_paths: {}, summary_status: "unavailable")
     end
 
     private
@@ -84,13 +85,18 @@ module Symphony
           )
         end
 
+        output_paths = persist_command_output(workspace_path:, stdout:, stderr:)
+        summary, summary_status = extract_summary(stdout)
+
         result = Result.new(
           success: status.success?,
           status: status.exitstatus,
           stdout: stdout,
           stderr: stderr,
           auth_mode: auth_mode,
-          summary: extract_summary(stdout)
+          summary: summary,
+          output_paths: output_paths,
+          summary_status: summary_status
         )
 
         @telemetry_logger&.event(
@@ -98,10 +104,63 @@ module Symphony
           issue: issue,
           body: "Agent command finished",
           severity_text: result.success ? "INFO" : "ERROR",
-          attributes: { auth_mode: auth_mode, success: result.success, exit_status: result.status }
+          attributes: {
+            auth_mode: auth_mode,
+            success: result.success,
+            exit_status: result.status,
+            stdout_path: output_paths[:stdout_path],
+            stderr_path: output_paths[:stderr_path],
+            summary_status: summary_status
+          }
         )
 
+        emit_summary_telemetry(issue:, result: result)
+
         result
+      end
+
+      def persist_command_output(workspace_path:, stdout:, stderr:)
+        output_dir = Pathname(workspace_path).join(".symphony")
+        FileUtils.mkdir_p(output_dir)
+
+        stdout_path = output_dir.join("agent.stdout.log")
+        stderr_path = output_dir.join("agent.stderr.log")
+
+        stdout_path.write(stdout.to_s)
+        stderr_path.write(stderr.to_s)
+
+        { stdout_path: stdout_path.to_s, stderr_path: stderr_path.to_s }
+      end
+
+      def emit_summary_telemetry(issue:, result:)
+        @telemetry_logger&.event(
+          name: "symphony.agent.summary",
+          issue: issue,
+          body: summary_telemetry_body(result.summary_status),
+          severity_text: result.summary_status == "parsed" ? "INFO" : "ERROR",
+          attributes: {
+            status: result.summary_status,
+            stdout_path: result.output_paths[:stdout_path],
+            stderr_path: result.output_paths[:stderr_path]
+          }
+        )
+      end
+
+      def summary_telemetry_body(status)
+        case status
+        when "parsed"
+          "Structured summary parsed"
+        when "missing_markers"
+          "Structured summary markers missing"
+        when "invalid_json"
+          "Structured summary JSON invalid"
+        when "missing_overview"
+          "Structured summary missing overview"
+        when "invalid_payload"
+          "Structured summary payload invalid"
+        else
+          "Structured summary unavailable"
+        end
       end
 
       def command_input(argv, prompt)
@@ -221,29 +280,50 @@ module Symphony
 
       def extract_summary(stdout)
         payload = extract_summary_payload(stdout)
-        return if payload.blank?
+        return [ nil, "missing_markers" ] if payload.blank?
 
         parsed = JSON.parse(payload)
-        return unless parsed.is_a?(Hash)
+        return [ nil, "invalid_payload" ] unless parsed.is_a?(Hash)
 
         overview = parsed["summary"].to_s.strip.presence || parsed["overview"].to_s.strip.presence
-        return if overview.blank?
+        return [ nil, "missing_overview" ] if overview.blank?
 
-        Summary.new(
-          overview: overview,
-          files_changed: string_list(parsed["files_changed"]),
-          tests_run: string_list(parsed["tests_run"]),
-          notes: string_list(parsed["notes"])
-        )
+        [ Summary.new(
+            overview: overview,
+            files_changed: string_list(parsed["files_changed"]),
+            tests_run: string_list(parsed["tests_run"]),
+            notes: string_list(parsed["notes"])
+          ),
+          "parsed" ]
       rescue JSON::ParserError
-        nil
+        [ nil, "invalid_json" ]
       end
 
       def extract_summary_payload(stdout)
         return if stdout.blank?
 
-        pattern = /#{Regexp.escape(SUMMARY_START_MARKER)}\s*(\{.*?\})\s*#{Regexp.escape(SUMMARY_END_MARKER)}/m
-        stdout[pattern, 1]
+        pattern = /#{Regexp.escape(SUMMARY_START_MARKER)}\s*(.*?)\s*#{Regexp.escape(SUMMARY_END_MARKER)}/m
+        text_output(stdout)[pattern, 1]
+      end
+
+      def text_output(stdout)
+        extracted = extract_text_from_event_stream(stdout)
+        extracted.presence || stdout
+      end
+
+      def extract_text_from_event_stream(stdout)
+        texts = stdout.each_line.filter_map do |line|
+          next if line.strip.empty?
+
+          parsed = JSON.parse(line)
+          next unless parsed["type"] == "text"
+
+          parsed.dig("part", "text")
+        rescue JSON::ParserError
+          return nil
+        end
+
+        texts.join("\n")
       end
 
       def string_list(value)
