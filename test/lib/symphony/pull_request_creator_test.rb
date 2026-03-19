@@ -17,16 +17,15 @@ class Symphony::PullRequestCreatorTest < ActiveSupport::TestCase
       commands << command
 
       case command
-      when "git rev-parse --verify origin/main"
-        [ "origin/main\n", Status.new(0) ]
       when "git checkout -B card-6"
         [ "", Status.new(0) ]
+      when "git rev-parse HEAD"
+        head_calls = commands.count { |candidate| candidate == "git rev-parse HEAD" }
+        [ head_calls == 1 ? "abc123\n" : "def456\n", Status.new(0) ]
       when "git add -A"
         [ "", Status.new(0) ]
       when "git status --porcelain"
         [ "", Status.new(0) ]
-      when "git rev-list --count origin/main..HEAD"
-        [ "3\n", Status.new(0) ]
       when "git push -u origin card-6"
         [ "", Status.new(0) ]
       when /gh pr create/
@@ -54,14 +53,12 @@ class Symphony::PullRequestCreatorTest < ActiveSupport::TestCase
     original_capture2e = Open3.method(:capture2e)
     Open3.define_singleton_method(:capture2e) do |command, chdir:|
       case command
-      when "git rev-parse --verify origin/main"
-        [ "origin/main\n", Status.new(0) ]
       when "git checkout -B card-6", "git add -A"
         [ "", Status.new(0) ]
+      when "git rev-parse HEAD"
+        [ "abc123\n", Status.new(0) ]
       when "git status --porcelain"
         [ "", Status.new(0) ]
-      when "git rev-list --count origin/main..HEAD"
-        [ "0\n", Status.new(0) ]
       else
         raise "Unexpected command: #{command}"
       end
@@ -93,18 +90,17 @@ class Symphony::PullRequestCreatorTest < ActiveSupport::TestCase
       commands << command
 
       case command
-      when "git rev-parse --verify origin/main"
-        [ "origin/main\n", Status.new(0) ]
       when "git checkout -B card-6"
         [ "", Status.new(0) ]
+      when "git rev-parse HEAD"
+        head_calls = commands.count { |candidate| candidate == "git rev-parse HEAD" }
+        [ head_calls == 1 ? "abc123\n" : "def456\n", Status.new(0) ]
       when "git add -A"
         [ "", Status.new(0) ]
       when "git status --porcelain"
         [ "M  file.txt\n", Status.new(0) ]
       when /git commit -m CARD-6/
         [ "", Status.new(0) ]
-      when "git rev-list --count origin/main..HEAD"
-        [ "3\n", Status.new(0) ]
       when "git push -u origin card-6"
         [ "", Status.new(0) ]
       when /gh pr edit/
@@ -125,5 +121,38 @@ class Symphony::PullRequestCreatorTest < ActiveSupport::TestCase
     assert commands.any? { |cmd| cmd.include?("gh pr edit") }
     assert commands.any? { |cmd| cmd.include?(existing_pr_url) }
     assert_not commands.any? { |cmd| cmd.include?("gh pr create") }
+  end
+
+  test "rework returns no changes when branch head is unchanged" do
+    creator = Symphony::PullRequestCreator.new(repo: "org/repo", base_branch: "main")
+    issue = Symphony::Issue.new(
+      identifier: "CARD-6",
+      title: "PRD init",
+      branch_name: "card-6",
+      pr_url: "https://github.com/org/repo/pull/42"
+    )
+
+    original_capture2e = Open3.method(:capture2e)
+    Open3.define_singleton_method(:capture2e) do |command, chdir:|
+      case command
+      when "git checkout -B card-6", "git add -A"
+        [ "", Status.new(0) ]
+      when "git rev-parse HEAD"
+        [ "abc123\n", Status.new(0) ]
+      when "git status --porcelain"
+        [ "", Status.new(0) ]
+      else
+        raise "Unexpected command: #{command}"
+      end
+    end
+
+    begin
+      result = creator.create_for(issue: issue, workspace_path: Rails.root)
+    ensure
+      Open3.define_singleton_method(:capture2e, original_capture2e)
+    end
+
+    assert_not result.success
+    assert_equal "No changes produced in workspace", result.error
   end
 end

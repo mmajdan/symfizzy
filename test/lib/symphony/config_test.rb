@@ -17,6 +17,12 @@ class Symphony::ConfigTest < ActiveSupport::TestCase
     assert_equal [ "active" ], config.tracker_active_states
   end
 
+  test "defaults active column names to todo and rework" do
+    config = Symphony::Config.new({ "tracker" => { "account_id" => "1234567" } })
+
+    assert_equal [ "Todo", "Rework" ], config.tracker_active_column_names
+  end
+
   test "includes done in default terminal states" do
     config = Symphony::Config.new({ "tracker" => { "account_id" => "1234567" } })
 

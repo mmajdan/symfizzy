@@ -72,6 +72,7 @@ module Symphony
         )
 
         @logger.info("Symphony implementing #{issue.identifier} in #{workspace.path}")
+        emit_telemetry("symphony.agent.prompt", issue: issue, body: "Agent prompt rendered", attributes: { prompt: prompt })
         emit_telemetry("symphony.agent.start", issue: issue, body: "Agent run started")
 
         # Run agent asynchronously in a separate thread
@@ -107,8 +108,11 @@ module Symphony
           emit_telemetry("symphony.pull_request.created", issue: issue, body: "PR created", attributes: { pr_url: pull_request.url })
 
           begin
-            add_summary_comment(issue.id, result.summary)
-            @logger.info("Symphony added summary comment for #{issue.identifier}")
+            if add_summary_comment(issue.id, result.summary)
+              @logger.info("Symphony added summary comment for #{issue.identifier}")
+            else
+              @logger.info("Symphony skipped summary comment for #{issue.identifier}: no parsed summary available")
+            end
           rescue => error
             @logger.error("Symphony failed to add summary comment for #{issue.identifier}: #{error.class}: #{error.message}")
           end
@@ -157,9 +161,10 @@ module Symphony
       end
 
       def add_summary_comment(issue_id, summary)
-        return if summary.blank?
+        return false if summary.blank?
 
         @tracker_client.add_comment(issue_id, body: format_summary_comment(summary))
+        true
       end
 
       def format_summary_comment(summary)

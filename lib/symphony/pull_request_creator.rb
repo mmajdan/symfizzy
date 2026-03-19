@@ -24,13 +24,14 @@ module Symphony
       body = "Automated changes for #{issue.identifier} by Symphony."
 
       with_workspace_git(workspace_path, "checkout -B #{Shellwords.escape(branch)}")
+      original_head = current_head(workspace_path)
       with_workspace_git(workspace_path, "add -A")
 
       if working_tree_dirty?(workspace_path)
         with_workspace_git(workspace_path, "commit -m #{Shellwords.escape(title)}")
       end
 
-      unless branch_has_changes_against_base?(workspace_path)
+      unless new_commit_produced?(workspace_path, original_head)
         return Result.new(success: false, error: "No changes produced in workspace")
       end
 
@@ -83,15 +84,16 @@ module Symphony
         status.present?
       end
 
-      def branch_has_changes_against_base?(workspace_path)
-        comparison_base = remote_base_branch(workspace_path)
-        commit_count = run_command!(workspace_path, "git rev-list --count #{Shellwords.escape(comparison_base)}..HEAD")
-
-        commit_count.to_i.positive?
-      end
-
       def with_workspace_git(workspace_path, args)
         run_command!(workspace_path, "git #{args}")
+      end
+
+      def new_commit_produced?(workspace_path, original_head)
+        current_head(workspace_path) != original_head
+      end
+
+      def current_head(workspace_path)
+        run_command!(workspace_path, "git rev-parse HEAD").strip
       end
 
       def remote_base_branch(workspace_path)

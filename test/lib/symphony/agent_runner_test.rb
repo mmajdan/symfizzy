@@ -1,3 +1,5 @@
+require "tmpdir"
+
 require "test_helper"
 
 class Symphony::AgentRunnerTest < ActiveSupport::TestCase
@@ -163,18 +165,22 @@ class Symphony::AgentRunnerTest < ActiveSupport::TestCase
       [ stdout, "", Status.new(0) ]
     end
 
-    begin
-      result = runner.run(issue: issue, prompt: "Implement change", workspace_path: Pathname("/tmp/workspace"))
+    Dir.mktmpdir do |dir|
+      workspace_path = Pathname(dir)
+      result = runner.run(issue: issue, prompt: "Implement change", workspace_path: workspace_path)
 
       assert result.success
       assert_equal "Updated the card workflow and added tests.", result.summary.overview
       assert_equal [ "lib/symphony/orchestrator.rb", "test/lib/symphony/orchestrator_test.rb" ], result.summary.files_changed
       assert_equal [ "bin/rails test test/lib/symphony/orchestrator_test.rb" ], result.summary.tests_run
       assert_equal [ "No migration required." ], result.summary.notes
-    ensure
-      Open3.define_singleton_method(:capture3, original_capture3)
-      Open3.define_singleton_method(:capture2e, original_capture2e)
+      assert_equal "parsed", result.summary_status
+      assert_equal "work log\nSYMPHONY_SUMMARY_START\n{\"summary\":\"Updated the card workflow and added tests.\",\"files_changed\":[\"lib/symphony/orchestrator.rb\",\"test/lib/symphony/orchestrator_test.rb\"],\"tests_run\":[\"bin/rails test test/lib/symphony/orchestrator_test.rb\"],\"notes\":[\"No migration required.\"]}\nSYMPHONY_SUMMARY_END\n", Pathname(result.output_paths[:stdout_path]).read
+      assert_equal "", Pathname(result.output_paths[:stderr_path]).read
     end
+  ensure
+    Open3.define_singleton_method(:capture3, original_capture3)
+    Open3.define_singleton_method(:capture2e, original_capture2e)
   end
 
   test "ignores invalid structured summary payload" do
@@ -206,15 +212,59 @@ class Symphony::AgentRunnerTest < ActiveSupport::TestCase
       [ stdout, "", Status.new(0) ]
     end
 
-    begin
-      result = runner.run(issue: issue, prompt: "Implement change", workspace_path: Pathname("/tmp/workspace"))
+    Dir.mktmpdir do |dir|
+      result = runner.run(issue: issue, prompt: "Implement change", workspace_path: Pathname(dir))
 
       assert result.success
       assert_nil result.summary
-    ensure
-      Open3.define_singleton_method(:capture3, original_capture3)
-      Open3.define_singleton_method(:capture2e, original_capture2e)
+      assert_equal "invalid_json", result.summary_status
     end
+  ensure
+    Open3.define_singleton_method(:capture3, original_capture3)
+    Open3.define_singleton_method(:capture2e, original_capture2e)
+  end
+
+  test "emits telemetry when structured summary markers are missing" do
+    logger = TestLogger.new
+    telemetry = TestTelemetryLogger.new
+    runner = Symphony::AgentRunner.new(
+      command: "codex exec --skip-git-repo-check -",
+      model: "gpt-5",
+      telemetry_logger: telemetry,
+      logger: logger
+    )
+
+    issue = Symphony::Issue.new(id: "1", identifier: "CARD-1", title: "Test issue")
+
+    original_capture3 = Open3.method(:capture3)
+    original_capture2e = Open3.method(:capture2e)
+    Open3.define_singleton_method(:capture2e) do |command|
+      if command == "codex login status"
+        [ "Logged in using ChatGPT\n", Status.new(0) ]
+      else
+        raise "unexpected command: #{command}"
+      end
+    end
+    Open3.define_singleton_method(:capture3) do |*args, stdin_data:, chdir:|
+      [ "plain stdout without markers", "plain stderr", Status.new(0) ]
+    end
+
+    Dir.mktmpdir do |dir|
+      result = runner.run(issue: issue, prompt: "Implement change", workspace_path: Pathname(dir))
+
+      assert result.success
+      assert_nil result.summary
+      assert_equal "missing_markers", result.summary_status
+
+      summary_event = telemetry.events.find { |event| event[:name] == "symphony.agent.summary" }
+      assert_equal "ERROR", summary_event[:severity_text]
+      assert_equal "missing_markers", summary_event[:attributes][:status]
+      assert_equal "plain stdout without markers", Pathname(result.output_paths[:stdout_path]).read
+      assert_equal "plain stderr", Pathname(result.output_paths[:stderr_path]).read
+    end
+  ensure
+    Open3.define_singleton_method(:capture3, original_capture3)
+    Open3.define_singleton_method(:capture2e, original_capture2e)
   end
 
   test "falls back to api key when chatgpt login fails for auth reasons" do
@@ -497,5 +547,45 @@ class Symphony::AgentRunnerTest < ActiveSupport::TestCase
     start_event = telemetry.events.find { |event| event[:name] == "symphony.agent.command.start" }
     assert_equal "opencode run --format json", start_event[:attributes][:command]
     assert_no_match(/Sensitive prompt data/, start_event[:attributes][:command])
+  end
+
+  test "extracts structured summary from opencode json event stream" do
+    logger = TestLogger.new
+    runner = Symphony::AgentRunner.new(
+      command: "opencode run --format json",
+      model: "opencode-go/kimi-k2.5",
+      auth_strategy: "api_key_only",
+      api_key: "literal-key",
+      logger: logger
+    )
+
+    issue = Symphony::Issue.new(id: "1", identifier: "CARD-1", title: "Test issue")
+
+    original_capture3 = Open3.method(:capture3)
+    original_capture2e = Open3.method(:capture2e)
+    Open3.define_singleton_method(:capture2e) do |command|
+      raise "login status should not be checked: #{command}"
+    end
+    Open3.define_singleton_method(:capture3) do |*args, stdin_data:, chdir:|
+      stdout = <<~OUT
+        {"type":"text","part":{"text":"Working..."}}
+        {"type":"text","part":{"text":"SYMPHONY_SUMMARY_START\n{\"summary\":\"Updated README and created hello.py\",\"files_changed\":[\"README.md\",\"hello.py\"],\"tests_run\":[\"python3 hello.py\"],\"notes\":[]}\nSYMPHONY_SUMMARY_END"}}
+      OUT
+
+      [ stdout, "", Status.new(0) ]
+    end
+
+    Dir.mktmpdir do |dir|
+      result = runner.run(issue: issue, prompt: "Implement change", workspace_path: Pathname(dir))
+
+      assert result.success
+      assert_equal "parsed", result.summary_status
+      assert_equal "Updated README and created hello.py", result.summary.overview
+      assert_equal [ "README.md", "hello.py" ], result.summary.files_changed
+      assert_equal [ "python3 hello.py" ], result.summary.tests_run
+    end
+  ensure
+    Open3.define_singleton_method(:capture3, original_capture3)
+    Open3.define_singleton_method(:capture2e, original_capture2e)
   end
 end
