@@ -9,14 +9,17 @@ module Symphony
       NOT_NOW_STATE = "not_now".freeze
       DONE_STATE = "done".freeze
       TODO_COLUMN_NAME = "todo".freeze
+      TODO_COLUMN_LABEL = "Todo".freeze
       IN_PROGRESS_COLUMN_NAME = "In Progress".freeze
       REWORK_COLUMN_NAME = "rework".freeze
+      REWORK_COLUMN_LABEL = "Rework".freeze
 
       def initialize(account_id:, board_ids: nil, active_states:, active_column_names: nil, terminal_states:)
         @account = Account.find_by!(external_account_id: account_id)
         @board_ids = board_ids
         @active_states = active_states.map(&:downcase)
-        @active_column_names = Array(active_column_names).filter_map { |name| name.to_s.strip.downcase.presence }.presence
+        @active_column_labels = Array(active_column_names).filter_map { |name| name.to_s.strip.presence }.presence
+        @active_column_names = @active_column_labels&.map(&:downcase)
         @terminal_states = terminal_states.map(&:downcase)
       end
 
@@ -71,6 +74,17 @@ module Symphony
 
         Current.set(account: @account, user: @account.system_user) do
           card.triage_into(in_progress_column)
+        end
+      end
+
+      def transition_to_retry(issue_id, previous_state:)
+        card = scoped_cards.find(issue_id)
+        retry_column = retry_column_for(card.board, previous_state: previous_state)
+
+        return if card.column == retry_column
+
+        Current.set(account: @account, user: @account.system_user) do
+          card.triage_into(retry_column)
         end
       end
 
@@ -171,6 +185,40 @@ module Symphony
           return false unless @active_states.include?(issue_state)
 
           @active_column_names.include?(card.column&.name.to_s.strip.downcase)
+        end
+
+        def retry_column_for(board, previous_state:)
+          if previous_state.to_s.casecmp(REWORK_STATE).zero?
+            find_or_create_column(board, name: retry_rework_column_name, color: "var(--color-card-1)")
+          else
+            find_or_create_column(board, name: retry_active_column_name, color: "var(--color-card-1)")
+          end
+        end
+
+        def retry_active_column_name
+          configured_retry_column = Array(@active_column_labels).find do |name|
+            !name.casecmp(REWORK_COLUMN_NAME).zero? && !name.casecmp(IN_PROGRESS_COLUMN_NAME).zero?
+          end
+
+          configured_retry_column || TODO_COLUMN_LABEL
+        end
+
+        def retry_rework_column_name
+          configured_rework_column = Array(@active_column_labels).find do |name|
+            name.casecmp(REWORK_COLUMN_NAME).zero?
+          end
+
+          configured_rework_column || REWORK_COLUMN_LABEL
+        end
+
+        def find_or_create_column(board, name:, color:)
+          board.columns.detect { |column| column.name.to_s.casecmp(name).zero? } ||
+            board.columns.create!(
+              name: name,
+              color: color,
+              position: board.columns.maximum(:position).to_i + 1,
+              account: @account
+            )
         end
     end
   end

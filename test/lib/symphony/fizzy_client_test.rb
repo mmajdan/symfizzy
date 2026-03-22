@@ -148,6 +148,62 @@ class Symphony::FizzyClientTest < ActiveSupport::TestCase
     end
   end
 
+  test "moves failed active issue back to retryable todo column" do
+    todo_column = boards(:writebook).columns.create!(
+      name: "ToDo",
+      color: "var(--color-card-1)",
+      position: 97,
+      account: accounts(:"37s")
+    )
+    client = Symphony::IssueTrackers::FizzyClient.new(
+      account_id: accounts(:"37s").external_account_id,
+      active_states: [ "active" ],
+      active_column_names: [ "ToDo", "Rework" ],
+      terminal_states: [ "closed", "not_now", "done" ]
+    )
+
+    card = cards(:buy_domain)
+    in_progress_column = card.board.columns.create!(
+      name: "In Progress",
+      color: "var(--color-card-2)",
+      position: 98,
+      account: accounts(:"37s")
+    )
+    card.update!(column: in_progress_column)
+
+    client.transition_to_retry(card.id, previous_state: "active")
+
+    assert_equal todo_column, card.reload.column
+  end
+
+  test "moves failed rework issue back to retryable rework column" do
+    rework_column = boards(:writebook).columns.create!(
+      name: "Rework",
+      color: "var(--color-card-1)",
+      position: 97,
+      account: accounts(:"37s")
+    )
+    client = Symphony::IssueTrackers::FizzyClient.new(
+      account_id: accounts(:"37s").external_account_id,
+      active_states: [ "active", "rework" ],
+      active_column_names: [ "ToDo", "Rework" ],
+      terminal_states: [ "closed", "not_now", "done" ]
+    )
+
+    card = cards(:buy_domain)
+    in_progress_column = card.board.columns.create!(
+      name: "In Progress",
+      color: "var(--color-card-2)",
+      position: 98,
+      account: accounts(:"37s")
+    )
+    card.update!(column: in_progress_column)
+
+    client.transition_to_retry(card.id, previous_state: "rework")
+
+    assert_equal rework_column, card.reload.column
+  end
+
   test "adds a system comment to the card" do
     client = Symphony::IssueTrackers::FizzyClient.new(
       account_id: accounts(:"37s").external_account_id,

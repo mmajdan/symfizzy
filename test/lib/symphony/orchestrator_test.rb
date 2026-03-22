@@ -87,13 +87,14 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
   end
 
   class FakeTrackerClient
-    attr_reader :comments, :in_progress_ids, :transitioned_ids
+    attr_reader :comments, :in_progress_ids, :transitioned_ids, :retry_ids
 
     def initialize(issues)
       @issues = issues
       @comments = []
       @in_progress_ids = []
       @transitioned_ids = []
+      @retry_ids = []
     end
 
     def fetch_active_issues
@@ -116,6 +117,11 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
     def transition_to_review(id)
       @transitioned_ids << id
       update_issue_state(id, "review")
+    end
+
+    def transition_to_retry(id, previous_state:)
+      @retry_ids << { id: id, previous_state: previous_state }
+      update_issue_state(id, previous_state)
     end
 
     private
@@ -152,6 +158,9 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
 
     assert_equal [ "2" ], recording_runner.handled_ids
     assert_equal [ "1", "2" ], tracker.in_progress_ids
+    assert_equal 2, tracker.retry_ids.size
+    assert_includes tracker.retry_ids,({ id: "1", previous_state: nil })
+    assert_includes tracker.retry_ids,({ id: "2", previous_state: nil })
     assert_empty tracker.comments
     assert_empty tracker.transitioned_ids
     assert_equal [ "CARD-1", "CARD-2" ], workspace_manager.handled_identifiers
@@ -185,6 +194,7 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
     wait_until { logger.errors.any? { |message| message.include?("No changes produced in workspace") } }
 
     assert_equal [ "1" ], tracker.in_progress_ids
+    assert_equal [ { id: "1", previous_state: "active" } ], tracker.retry_ids
     assert_empty tracker.comments
     assert_empty tracker.transitioned_ids
     assert logger.infos.any? { |message| message.include?("implementation finished for CARD-1; creating PR") }
@@ -220,6 +230,64 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
     assert_equal [ "1" ], tracker.transitioned_ids
     assert logger.infos.any? { |message| message.include?("skipped summary comment for CARD-1") }
     assert logger.infos.any? { |message| message.include?("PR ready for CARD-1: https://github.com/org/repo/pull/1 (state: review)") }
+  end
+
+  test "moves failed active issues back to retryable state" do
+    issue = Symphony::Issue.new(id: "1", identifier: "CARD-1", state: "active")
+    tracker = FakeTrackerClient.new([ issue ])
+    runner = Class.new do
+      def run(issue:, prompt:, workspace_path:)
+        OpenStruct.new(success: false, error: "execution expired", stderr: nil)
+      end
+    end.new
+
+    orchestrator = Symphony::Orchestrator.new(
+      config: OpenStruct.new(max_concurrent_agents: 10, max_turns: 20),
+      workflow_loader: FakeWorkflowLoader.new,
+      tracker_client: tracker,
+      workspace_manager: FakeWorkspaceManager.new,
+      agent_runner: runner,
+      pull_request_creator: FakePullRequestCreator.new,
+      logger: TestLogger.new
+    )
+
+    orchestrator.tick
+
+    wait_until { tracker.retry_ids == [ { id: "1", previous_state: "active" } ] }
+
+    assert_equal [ "1" ], tracker.in_progress_ids
+    assert_equal [ { id: "1", previous_state: "active" } ], tracker.retry_ids
+    assert_equal "active", tracker.fetch_issue("1").state
+  end
+
+  test "moves failed rework issues back to retryable state" do
+    issue = Symphony::Issue.new(id: "1", identifier: "CARD-1", state: "rework", branch_name: "card-1")
+    tracker = FakeTrackerClient.new([ issue ])
+    runner = Class.new do
+      def run(issue:, prompt:, workspace_path:)
+        OpenStruct.new(success: false, error: "execution expired", stderr: nil)
+      end
+    end.new
+    workspace_manager = FakeWorkspaceManager.new
+
+    orchestrator = Symphony::Orchestrator.new(
+      config: OpenStruct.new(max_concurrent_agents: 10, max_turns: 20),
+      workflow_loader: FakeWorkflowLoader.new,
+      tracker_client: tracker,
+      workspace_manager: workspace_manager,
+      agent_runner: runner,
+      pull_request_creator: FakePullRequestCreator.new,
+      logger: TestLogger.new
+    )
+
+    orchestrator.tick
+
+    wait_until { tracker.retry_ids == [ { id: "1", previous_state: "rework" } ] }
+
+    assert_equal [ "1" ], tracker.in_progress_ids
+    assert_equal [ { id: "1", previous_state: "rework" } ], tracker.retry_ids
+    assert_equal [ "card-1" ], workspace_manager.handled_branch_names
+    assert_equal "rework", tracker.fetch_issue("1").state
   end
 
   test "adds structured implementation summary comment before PR comment" do

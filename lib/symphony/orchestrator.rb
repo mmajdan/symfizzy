@@ -50,6 +50,7 @@ module Symphony
           @running[issue.id] = issue
         end
 
+        original_state = issue.state
         @logger.info("Symphony picking up #{issue.identifier} (state: #{issue.state})")
         emit_telemetry("symphony.issue.pickup", issue: issue, body: "Card picked up by orchestrator")
         log_issue_contents(issue)
@@ -58,7 +59,7 @@ module Symphony
         emit_telemetry("symphony.issue.transition", issue: issue, body: "Moved to In Progress", attributes: { target_state: "active" })
 
         # If issue is in rework state, checkout existing branch
-        branch_name = issue.state == "rework" ? issue.branch_name : nil
+        branch_name = original_state == "rework" ? issue.branch_name : nil
         @logger.info("Symphony creating workspace for #{issue.identifier}...")
         workspace = @workspace_manager.create_for_issue(issue.identifier, branch_name: branch_name)
         @logger.info("Symphony workspace created for #{issue.identifier} at #{workspace.path}")
@@ -83,13 +84,15 @@ module Symphony
             if result.success
               @logger.info("Symphony implementation finished for #{issue.identifier}; creating PR")
               emit_telemetry("symphony.agent.finish", issue: issue, body: "Agent run finished", attributes: { success: true })
-              handle_success(issue, workspace.path, result)
+              handle_success(issue, workspace.path, result, previous_state: original_state)
             else
               @logger.error("Symphony implementation failed for #{issue.identifier} (state: #{current_state(issue.id)}): #{result.error || result.stderr}")
               emit_telemetry("symphony.agent.finish", issue: issue, body: "Agent run failed", severity_text: "ERROR", attributes: { success: false, error: result.error || result.stderr })
+              transition_to_retry(issue, previous_state: original_state)
             end
           rescue => error
             @logger.error("Symphony agent thread failed for #{issue.identifier}: #{error.class}: #{error.message}")
+            transition_to_retry(issue, previous_state: original_state)
           ensure
             @mutex.synchronize do
               @claimed.delete(issue.id)
@@ -100,7 +103,7 @@ module Symphony
         end
       end
 
-      def handle_success(issue, workspace_path, result)
+      def handle_success(issue, workspace_path, result, previous_state:)
         pull_request = @pull_request_creator.create_for(issue: issue, workspace_path: workspace_path)
 
         if pull_request.success
@@ -129,6 +132,7 @@ module Symphony
         else
           @logger.error("Symphony implementation finished for #{issue.identifier} but PR creation failed (state: #{current_state(issue.id)}): #{pull_request.error}")
           emit_telemetry("symphony.pull_request.failed", issue: issue, body: "PR creation failed", severity_text: "ERROR", attributes: { error: pull_request.error })
+          transition_to_retry(issue, previous_state: previous_state)
         end
       end
 
@@ -195,6 +199,13 @@ module Symphony
         end
 
         lines.join("\n")
+      end
+
+      def transition_to_retry(issue, previous_state:)
+        @tracker_client.transition_to_retry(issue.id, previous_state: previous_state)
+        @logger.info("Symphony moved #{issue.identifier} back to retryable column (state: #{current_state(issue.id)})")
+      rescue => error
+        @logger.error("Symphony failed to move #{issue.identifier} back to retryable column: #{error.class}: #{error.message}")
       end
   end
 end

@@ -76,7 +76,7 @@ module Symphony
           attributes: { auth_mode: auth_mode, command: telemetry_command(argv, stdin_data) }
         )
 
-        Timeout.timeout(600) do  # 10 minutes timeout for agent runs
+        Timeout.timeout(20_000) do  # 20,000 seconds timeout for agent runs
           stdout, stderr, status = Open3.capture3(
             env,
             *command_argv,
