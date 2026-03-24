@@ -96,6 +96,22 @@ module Symphony
         end
       end
 
+      def complete_steps(issue_id, completed_steps:)
+        targets = normalized_completed_steps(completed_steps)
+        return 0 if targets.empty?
+
+        card = scoped_cards.includes(:steps).find(issue_id)
+        steps_to_complete = card.steps.reject(&:completed?).select do |step|
+          targets.include?(normalize_step_content(step.content))
+        end
+
+        Current.set(account: @account, user: @account.system_user) do
+          steps_to_complete.each { |step| step.update!(completed: true) }
+        end
+
+        steps_to_complete.size
+      end
+
       private
         def scoped_cards
           relation = @account.cards
@@ -118,7 +134,8 @@ module Symphony
             created_at: card.created_at,
             updated_at: card.updated_at,
             pr_url: extract_pr_url(card),
-            comments: extract_comments(card)
+            comments: extract_comments(card),
+            steps: extract_steps(card)
           )
         end
 
@@ -136,6 +153,27 @@ module Symphony
         def extract_comments(card)
           # Extract all card comments as array of strings
           card.comments.map { |c| c.body.to_plain_text }.reject(&:blank?)
+        end
+
+        def extract_steps(card)
+          card.steps.order(:id).filter_map do |step|
+            content = step.content.to_s.strip
+            next if content.blank?
+
+            prefix = step.completed? ? "[done]" : "[todo]"
+            "#{prefix} #{content}"
+          end
+        end
+
+        def normalized_completed_steps(completed_steps)
+          Array(completed_steps).filter_map do |step|
+            normalize_step_content(step)
+          end
+        end
+
+        def normalize_step_content(content)
+          normalized = content.to_s.strip.sub(/\A\[(?:todo|done)\]\s*/i, "").strip
+          normalized.presence
         end
 
         def state_for(card)

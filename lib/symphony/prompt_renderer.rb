@@ -18,7 +18,7 @@ module Symphony
           raise WorkflowError, "Unknown template variable: #{path}"
         end
 
-        value.to_s
+        stringify_value(value)
       end
     end
 
@@ -29,6 +29,15 @@ module Symphony
           break [ false, nil ] unless cursor.key?(key)
 
           [ true, cursor[key] ]
+        end
+      end
+
+      def stringify_value(value)
+        case value
+        when Array
+          value.map(&:to_s).join("\n")
+        else
+          value.to_s
         end
       end
   end

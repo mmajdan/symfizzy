@@ -104,6 +104,7 @@ module Symphony
       end
 
       def handle_success(issue, workspace_path, result, previous_state:)
+        sync_completed_steps(issue.id, result.summary)
         pull_request = @pull_request_creator.create_for(issue: issue, workspace_path: workspace_path)
 
         if pull_request.success
@@ -200,6 +201,18 @@ module Symphony
 
         @pull_request_creator.add_comment(pr_url: pr_url, body: body, workspace_path: workspace_path)
         true
+      end
+
+      def sync_completed_steps(issue_id, summary)
+        completed_steps = summary&.completed_steps
+        return false if completed_steps.blank?
+
+        updated_count = @tracker_client.complete_steps(issue_id, completed_steps: completed_steps)
+        @logger.info("Symphony marked #{updated_count} card step(s) complete for #{issue_id}")
+        updated_count.positive?
+      rescue => error
+        @logger.error("Symphony failed to complete card steps for #{issue_id}: #{error.class}: #{error.message}")
+        false
       end
 
       def no_changes_produced?(pull_request)

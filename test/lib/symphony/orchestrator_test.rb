@@ -93,7 +93,7 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
   end
 
   class FakeTrackerClient
-    attr_reader :comments, :in_progress_ids, :transitioned_ids, :retry_ids
+    attr_reader :comments, :in_progress_ids, :transitioned_ids, :retry_ids, :completed_steps_calls
 
     def initialize(issues)
       @issues = issues
@@ -101,6 +101,7 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
       @in_progress_ids = []
       @transitioned_ids = []
       @retry_ids = []
+      @completed_steps_calls = []
     end
 
     def fetch_active_issues
@@ -118,6 +119,11 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
 
     def add_comment(id, body:)
       @comments << { id: id, body: body }
+    end
+
+    def complete_steps(id, completed_steps:)
+      @completed_steps_calls << { id: id, completed_steps: completed_steps }
+      completed_steps.size
     end
 
     def transition_to_review(id)
@@ -304,7 +310,8 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
       overview: "Updated Symphony to post implementation summaries to cards.",
       files_changed: [ "lib/symphony/agent_runner.rb", "lib/symphony/orchestrator.rb" ],
       tests_run: [ "bin/rails test test/lib/symphony/orchestrator_test.rb" ],
-      notes: [ "Falls back to PR-only comments if the summary block is missing." ]
+      notes: [ "Falls back to PR-only comments if the summary block is missing." ],
+      completed_steps: [ "Follow the first step", "Run the second step" ]
     )
     runner = Class.new do
       define_method(:initialize) { |summary| @summary = summary }
@@ -354,6 +361,10 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
       body: tracker.comments.first[:body],
       workspace_path: "/tmp/CARD-1"
     } ], pull_request_creator.comment_calls
+    assert_equal [ {
+      id: "1",
+      completed_steps: [ "Follow the first step", "Run the second step" ]
+    } ], tracker.completed_steps_calls
     assert_equal [ "1" ], tracker.transitioned_ids
   end
 

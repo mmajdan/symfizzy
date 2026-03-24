@@ -223,6 +223,42 @@ class Symphony::FizzyClientTest < ActiveSupport::TestCase
     assert_equal "GitHub PR: https://github.com/example/repo/pull/123", comment.body.to_plain_text.strip
   end
 
+  test "includes card steps in the symphony issue payload" do
+    card = cards(:buy_domain)
+    card.steps.create!(content: "Follow the first step")
+    card.steps.create!(content: "Already done step", completed: true)
+
+    client = Symphony::IssueTrackers::FizzyClient.new(
+      account_id: accounts(:"37s").external_account_id,
+      active_states: [ "active", "review", "merging" ],
+      terminal_states: [ "closed", "not_now", "done" ]
+    )
+
+    issue = client.fetch_issue(card.id)
+
+    assert_equal [ "[todo] Follow the first step", "[done] Already done step" ], issue.steps
+  end
+
+  test "marks matching card steps complete" do
+    card = cards(:buy_domain)
+    first_step = card.steps.create!(content: "Follow the first step")
+    done_step = card.steps.create!(content: "Already done step", completed: true)
+    unmatched_step = card.steps.create!(content: "Leave this pending")
+
+    client = Symphony::IssueTrackers::FizzyClient.new(
+      account_id: accounts(:"37s").external_account_id,
+      active_states: [ "active", "review", "merging" ],
+      terminal_states: [ "closed", "not_now", "done" ]
+    )
+
+    updated_count = client.complete_steps(card.id, completed_steps: [ "Follow the first step", "[todo] Already done step" ])
+
+    assert_equal 1, updated_count
+    assert_predicate first_step.reload, :completed?
+    assert_predicate done_step.reload, :completed?
+    assert_not unmatched_step.reload.completed?
+  end
+
   test "supports filtering by board ids" do
     client = Symphony::IssueTrackers::FizzyClient.new(
       account_id: accounts(:"37s").external_account_id,

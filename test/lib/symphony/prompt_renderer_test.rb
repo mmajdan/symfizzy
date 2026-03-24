@@ -30,4 +30,18 @@ class Symphony::PromptRendererTest < ActiveSupport::TestCase
 
     assert_match "Unknown template variable", error.message
   end
+
+  test "renders issue steps" do
+    issue = Symphony::Issue.new(identifier: "CARD-1", steps: [ "[todo] First step", "[done] Second step" ])
+
+    rendered = Symphony::PromptRenderer.new.render(
+      template: "Steps: {{ issue.steps }}",
+      issue: issue,
+      attempt: 0,
+      turn_number: 1,
+      max_turns: 20
+    )
+
+    assert_equal "Steps: [todo] First step\n[done] Second step", rendered
+  end
 end

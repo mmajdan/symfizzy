@@ -14,6 +14,7 @@ module Symphony
     :updated_at,
     :pr_url,
     :comments,
+    :steps,
     keyword_init: true
   ) do
     def to_template_payload
@@ -31,7 +32,8 @@ module Symphony
         "created_at" => created_at,
         "updated_at" => updated_at,
         "pr_url" => pr_url,
-        "comments" => comments
+        "comments" => comments,
+        "steps" => steps
       }
     end
   end
