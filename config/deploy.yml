@@ -28,8 +28,8 @@ proxy:
   forward_headers: true
   host: nexus.majdan.online
   run:
-    http_port: 3008
-    https_port: 3009
+    http_port: 3000
+    https_port: 3443
     bind_ips:
       - 127.0.0.1
 

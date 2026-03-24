@@ -80,8 +80,9 @@ bin/kamal symphony_shell
 Verify the direct troubleshooting endpoints:
 
 ```sh
-curl -i http://nexus.majdan.online:3008/up
-curl -i https://nexus.majdan.online:3009/up
+curl -i -H 'Host: autopilot.re' http://127.0.0.1:3000/up
+curl -i -H 'Host: nexus.majdan.online' http://127.0.0.1:3000/session/new
+curl -ik --resolve nexus.majdan.online:3443:127.0.0.1 https://nexus.majdan.online:3443/up
 ```
 
 Query the production account id for an email address:
@@ -185,20 +186,37 @@ ssh nexus.majdan.online 'name=$(docker ps --format "{{.Names}}" | grep "^fizzy-w
 
 `nexus.majdan.online` behind Caddy returns `502`, loops on redirects, or serves `404` instead of Fizzy:
 
-- Kamal is configured to listen only on `127.0.0.1:3008` and `127.0.0.1:3009`, so Caddy must proxy to loopback, not `localhost`.
-- Proxying Caddy to `127.0.0.1:3008` caused a redirect loop because Kamal redirected HTTP to HTTPS.
-- Proxying Caddy to `127.0.0.1:3009` without overriding the upstream `Host` caused public requests to return `404`, even though direct access to `:3009` worked.
+- On `nexus`, Fizzy and `Nexus-Autopilot` share the same `kamal-proxy`, which listens on `127.0.0.1:3000` and `127.0.0.1:3443`.
+- Caddy must route by hostname to that shared proxy, not to app-specific ports.
+- Proxying Fizzy to `127.0.0.1:3000` causes a redirect loop because Kamal redirects HTTP to HTTPS for `nexus.majdan.online`.
+- Proxying Fizzy to `127.0.0.1:3443` without overriding the upstream `Host` can return the wrong app or a `404`, depending on which hostname Kamal sees.
 - The working Caddy config on `nexus` is:
 
 ```caddy
 nexus.majdan.online {
-        reverse_proxy https://127.0.0.1:3009 {
-                header_up Host nexus.majdan.online:3009
+        reverse_proxy https://127.0.0.1:3443 {
+                header_up Host nexus.majdan.online:3443
                 transport http {
                         tls_server_name nexus.majdan.online
                 }
         }
 }
+
+autopilot.re {
+        reverse_proxy http://127.0.0.1:3000
+}
+```
+
+- Fizzy works directly through the shared Kamal proxy with:
+
+```sh
+curl -ik --resolve nexus.majdan.online:3443:127.0.0.1 https://nexus.majdan.online:3443/session/new -I
+```
+
+- `Nexus-Autopilot` works directly through the shared Kamal proxy with:
+
+```sh
+curl -i -H 'Host: autopilot.re' http://127.0.0.1:3000/up
 ```
 
 - After changing `/etc/caddy/Caddyfile`, validate and reload:
@@ -212,8 +230,9 @@ sudo systemctl reload caddy
 
 ```sh
 curl -k -I https://nexus.majdan.online/session/new
-curl -i http://127.0.0.1:3008/up
-curl -ik --resolve nexus.majdan.online:3009:127.0.0.1 https://nexus.majdan.online:3009/up
+curl -k -I https://autopilot.re
+curl -i -H 'Host: autopilot.re' http://127.0.0.1:3000/up
+curl -ik --resolve nexus.majdan.online:3443:127.0.0.1 https://nexus.majdan.online:3443/up
 ```
 
 

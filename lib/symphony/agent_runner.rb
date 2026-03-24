@@ -9,7 +9,7 @@ module Symphony
     SUMMARY_END_MARKER = "SYMPHONY_SUMMARY_END".freeze
 
     Summary = Struct.new(:overview, :files_changed, :tests_run, :notes, keyword_init: true)
-    Result = Struct.new(:success, :status, :stdout, :stderr, :error, :auth_mode, :summary, :output_paths, :summary_status, keyword_init: true)
+    Result = Struct.new(:success, :status, :stdout, :stderr, :error, :auth_mode, :summary, :output_paths, :summary_status, :agent_output, keyword_init: true)
     CHATGPT_LOGIN_MODE = "chatgpt_login".freeze
     API_KEY_MODE = "api_key".freeze
     UNKNOWN_AUTH_MODE = "unknown".freeze
@@ -51,7 +51,7 @@ module Symphony
       run_command(issue:, env:, argv: login_command_argv, prompt:, workspace_path:, auth_mode: UNKNOWN_AUTH_MODE)
     rescue => error
       @telemetry_logger&.event(name: "symphony.agent.command.exception", issue: issue, body: "Runner raised an exception", severity_text: "ERROR", attributes: { error_class: error.class.name, error_message: error.message })
-      Result.new(success: false, status: nil, stdout: "", stderr: "", error: error.message, auth_mode: UNKNOWN_AUTH_MODE, output_paths: {}, summary_status: "unavailable")
+      Result.new(success: false, status: nil, stdout: "", stderr: "", error: error.message, auth_mode: UNKNOWN_AUTH_MODE, output_paths: {}, summary_status: "unavailable", agent_output: nil)
     end
 
     private
@@ -87,6 +87,7 @@ module Symphony
 
         output_paths = persist_command_output(workspace_path:, stdout:, stderr:)
         summary, summary_status = extract_summary(stdout)
+        agent_output = format_agent_output(stdout:, stderr:)
 
         result = Result.new(
           success: status.success?,
@@ -96,7 +97,8 @@ module Symphony
           auth_mode: auth_mode,
           summary: summary,
           output_paths: output_paths,
-          summary_status: summary_status
+          summary_status: summary_status,
+          agent_output: agent_output
         )
 
         @telemetry_logger&.event(
@@ -328,6 +330,27 @@ module Symphony
 
       def string_list(value)
         Array(value).filter_map { |item| item.to_s.strip.presence }
+      end
+
+      def format_agent_output(stdout:, stderr:)
+        sections = []
+
+        stdout_text = text_output(stdout).to_s.strip
+        if stdout_text.present?
+          sections << "Stdout"
+          sections << ""
+          sections << stdout_text
+        end
+
+        stderr_text = stderr.to_s.strip
+        if stderr_text.present?
+          sections << "" if sections.any?
+          sections << "Stderr"
+          sections << ""
+          sections << stderr_text
+        end
+
+        sections.join("\n").presence
       end
   end
 end

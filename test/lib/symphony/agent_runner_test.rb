@@ -175,6 +175,14 @@ class Symphony::AgentRunnerTest < ActiveSupport::TestCase
       assert_equal [ "bin/rails test test/lib/symphony/orchestrator_test.rb" ], result.summary.tests_run
       assert_equal [ "No migration required." ], result.summary.notes
       assert_equal "parsed", result.summary_status
+      assert_equal <<~OUTPUT.strip, result.agent_output
+        Stdout
+
+        work log
+        SYMPHONY_SUMMARY_START
+        {"summary":"Updated the card workflow and added tests.","files_changed":["lib/symphony/orchestrator.rb","test/lib/symphony/orchestrator_test.rb"],"tests_run":["bin/rails test test/lib/symphony/orchestrator_test.rb"],"notes":["No migration required."]}
+        SYMPHONY_SUMMARY_END
+      OUTPUT
       assert_equal "work log\nSYMPHONY_SUMMARY_START\n{\"summary\":\"Updated the card workflow and added tests.\",\"files_changed\":[\"lib/symphony/orchestrator.rb\",\"test/lib/symphony/orchestrator_test.rb\"],\"tests_run\":[\"bin/rails test test/lib/symphony/orchestrator_test.rb\"],\"notes\":[\"No migration required.\"]}\nSYMPHONY_SUMMARY_END\n", Pathname(result.output_paths[:stdout_path]).read
       assert_equal "", Pathname(result.output_paths[:stderr_path]).read
     end
@@ -583,6 +591,53 @@ class Symphony::AgentRunnerTest < ActiveSupport::TestCase
       assert_equal "Updated README and created hello.py", result.summary.overview
       assert_equal [ "README.md", "hello.py" ], result.summary.files_changed
       assert_equal [ "python3 hello.py" ], result.summary.tests_run
+    end
+  ensure
+    Open3.define_singleton_method(:capture3, original_capture3)
+    Open3.define_singleton_method(:capture2e, original_capture2e)
+  end
+
+  test "extracts readable agent output from json event stream and stderr" do
+    runner = Symphony::AgentRunner.new(
+      command: "opencode run --format json",
+      model: "gpt-5",
+      logger: TestLogger.new
+    )
+
+    issue = Symphony::Issue.new(id: "1", identifier: "CARD-1", title: "Test issue")
+
+    original_capture3 = Open3.method(:capture3)
+    original_capture2e = Open3.method(:capture2e)
+    Open3.define_singleton_method(:capture2e) do |command|
+      if command == "opencode auth list"
+        [ "OpenAI oauth", Status.new(0) ]
+      else
+        raise "unexpected command: #{command}"
+      end
+    end
+    Open3.define_singleton_method(:capture3) do |*args, stdin_data:, chdir:|
+      stdout = <<~OUT
+        {"type":"text","part":{"text":"Started work"}}
+        {"type":"text","part":{"text":"Implemented feature"}}
+      OUT
+
+      [ stdout, "warning output", Status.new(0) ]
+    end
+
+    Dir.mktmpdir do |dir|
+      result = runner.run(issue: issue, prompt: "Implement change", workspace_path: Pathname(dir))
+
+      assert result.success
+      assert_equal <<~OUTPUT.strip, result.agent_output
+        Stdout
+
+        Started work
+        Implemented feature
+
+        Stderr
+
+        warning output
+      OUTPUT
     end
   ensure
     Open3.define_singleton_method(:capture3, original_capture3)
