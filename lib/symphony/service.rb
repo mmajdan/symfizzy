@@ -71,7 +71,11 @@ module Symphony
             logger: @logger,
             telemetry_logger: telemetry_logger
           ),
-          pull_request_creator: PullRequestCreator.new(repo: @config.github_repo, base_branch: @config.github_base),
+          pull_request_creator: PullRequestCreator.new(
+            repo: @config.github_repo,
+            base_branch: @config.github_base,
+            github_token: @config.github_token
+          ),
           logger: @logger,
           telemetry_logger: telemetry_logger
         )

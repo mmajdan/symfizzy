@@ -110,14 +110,26 @@ module Symphony
           @logger.info("Symphony PR created for #{issue.identifier}: #{pull_request.url}")
           emit_telemetry("symphony.pull_request.created", issue: issue, body: "PR created", attributes: { pr_url: pull_request.url })
 
+          summary_comment_body = result.summary.present? ? format_summary_comment(result.summary) : nil
+
           begin
-            if add_summary_comment(issue.id, result.summary)
+            if add_summary_comment(issue.id, result.summary, body: summary_comment_body)
               @logger.info("Symphony added summary comment for #{issue.identifier}")
             else
               @logger.info("Symphony skipped summary comment for #{issue.identifier}: no parsed summary available")
             end
           rescue => error
             @logger.error("Symphony failed to add summary comment for #{issue.identifier}: #{error.class}: #{error.message}")
+          end
+
+          begin
+            if add_pull_request_summary_comment(pull_request.url, workspace_path, summary_comment_body)
+              @logger.info("Symphony added PR summary comment for #{issue.identifier}")
+            else
+              @logger.info("Symphony skipped PR summary comment for #{issue.identifier}: no parsed summary available")
+            end
+          rescue => error
+            @logger.error("Symphony failed to add PR summary comment for #{issue.identifier}: #{error.class}: #{error.message}")
           end
 
           begin
@@ -129,6 +141,18 @@ module Symphony
 
           @tracker_client.transition_to_review(issue.id)
           @logger.info("Symphony PR ready for #{issue.identifier}: #{pull_request.url} (state: #{current_state(issue.id)})")
+        elsif no_changes_produced?(pull_request)
+          @logger.info("Symphony implementation produced no workspace changes for #{issue.identifier}; moving to Review")
+
+          begin
+            @tracker_client.add_comment(issue.id, body: pull_request.error)
+            @logger.info("Symphony added no-op comment for #{issue.identifier}")
+          rescue => error
+            @logger.error("Symphony failed to add no-op comment for #{issue.identifier}: #{error.class}: #{error.message}")
+          end
+
+          @tracker_client.transition_to_review(issue.id)
+          @logger.info("Symphony moved #{issue.identifier} to Review without PR update (state: #{current_state(issue.id)})")
         else
           @logger.error("Symphony implementation finished for #{issue.identifier} but PR creation failed (state: #{current_state(issue.id)}): #{pull_request.error}")
           emit_telemetry("symphony.pull_request.failed", issue: issue, body: "PR creation failed", severity_text: "ERROR", attributes: { error: pull_request.error })
@@ -164,11 +188,22 @@ module Symphony
         )
       end
 
-      def add_summary_comment(issue_id, summary)
+      def add_summary_comment(issue_id, summary, body: nil)
         return false if summary.blank?
 
-        @tracker_client.add_comment(issue_id, body: format_summary_comment(summary))
+        @tracker_client.add_comment(issue_id, body: body || format_summary_comment(summary))
         true
+      end
+
+      def add_pull_request_summary_comment(pr_url, workspace_path, body)
+        return false if body.blank?
+
+        @pull_request_creator.add_comment(pr_url: pr_url, body: body, workspace_path: workspace_path)
+        true
+      end
+
+      def no_changes_produced?(pull_request)
+        pull_request.error == "No changes produced in workspace"
       end
 
       def format_summary_comment(summary)

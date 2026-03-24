@@ -73,16 +73,22 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
   end
 
   class FakePullRequestCreator
-    attr_reader :handled_ids
+    attr_reader :handled_ids, :comment_calls
 
     def initialize(result: OpenStruct.new(success: true, url: nil))
       @result = result
       @handled_ids = []
+      @comment_calls = []
     end
 
     def create_for(issue:, workspace_path:)
       @handled_ids << issue.id
       @result
+    end
+
+    def add_comment(pr_url:, body:, workspace_path:)
+      @comment_calls << { pr_url: pr_url, body: body, workspace_path: workspace_path }
+      true
     end
   end
 
@@ -169,7 +175,7 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
     assert logger.errors.any? { |message| message.include?("CARD-1") }
   end
 
-  test "does not transition issue to review when no changes were produced" do
+  test "transitions issue to review with a card comment when no changes were produced" do
     issue = Symphony::Issue.new(id: "1", identifier: "CARD-1", state: "active")
     logger = TestLogger.new
     tracker = FakeTrackerClient.new([ issue ])
@@ -191,14 +197,14 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
 
     orchestrator.tick
 
-    wait_until { logger.errors.any? { |message| message.include?("No changes produced in workspace") } }
+    wait_until { tracker.comments.present? && tracker.transitioned_ids.present? }
 
     assert_equal [ "1" ], tracker.in_progress_ids
-    assert_equal [ { id: "1", previous_state: "active" } ], tracker.retry_ids
-    assert_empty tracker.comments
-    assert_empty tracker.transitioned_ids
+    assert_empty tracker.retry_ids
+    assert_equal [ { id: "1", body: "No changes produced in workspace" } ], tracker.comments
+    assert_equal [ "1" ], tracker.transitioned_ids
     assert logger.infos.any? { |message| message.include?("implementation finished for CARD-1; creating PR") }
-    assert logger.errors.any? { |message| message.include?("No changes produced in workspace") }
+    assert logger.infos.any? { |message| message.include?("moving to Review") }
   end
 
   test "adds card comment with PR URL before transitioning issue to review" do
@@ -308,13 +314,15 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
       end
     end.new(summary)
 
+    pull_request_creator = FakePullRequestCreator.new(result: OpenStruct.new(success: true, url: "https://github.com/org/repo/pull/1"))
+
     orchestrator = Symphony::Orchestrator.new(
       config: OpenStruct.new(max_concurrent_agents: 10, max_turns: 20),
       workflow_loader: FakeWorkflowLoader.new,
       tracker_client: tracker,
       workspace_manager: FakeWorkspaceManager.new,
       agent_runner: runner,
-      pull_request_creator: FakePullRequestCreator.new(result: OpenStruct.new(success: true, url: "https://github.com/org/repo/pull/1")),
+      pull_request_creator: pull_request_creator,
       logger: logger
     )
 
@@ -341,6 +349,11 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
       - Falls back to PR-only comments if the summary block is missing.
     BODY
     assert_equal({ id: "1", body: "GitHub PR: https://github.com/org/repo/pull/1" }, tracker.comments.second)
+    assert_equal [ {
+      pr_url: "https://github.com/org/repo/pull/1",
+      body: tracker.comments.first[:body],
+      workspace_path: "/tmp/CARD-1"
+    } ], pull_request_creator.comment_calls
     assert_equal [ "1" ], tracker.transitioned_ids
   end
 
