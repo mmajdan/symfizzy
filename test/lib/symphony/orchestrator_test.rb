@@ -73,12 +73,14 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
   end
 
   class FakePullRequestCreator
-    attr_reader :handled_ids, :comment_calls
+    attr_reader :handled_ids, :comment_calls, :merge_calls
 
-    def initialize(result: OpenStruct.new(success: true, url: nil))
+    def initialize(result: OpenStruct.new(success: true, url: nil), merge_result: OpenStruct.new(success: true, url: nil))
       @result = result
+      @merge_result = merge_result
       @handled_ids = []
       @comment_calls = []
+      @merge_calls = []
     end
 
     def create_for(issue:, workspace_path:)
@@ -90,10 +92,15 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
       @comment_calls << { pr_url: pr_url, body: body, workspace_path: workspace_path }
       true
     end
+
+    def merge(pr_url:, workspace_path:)
+      @merge_calls << { pr_url: pr_url, workspace_path: workspace_path }
+      @merge_result
+    end
   end
 
   class FakeTrackerClient
-    attr_reader :comments, :in_progress_ids, :transitioned_ids, :retry_ids, :completed_steps_calls
+    attr_reader :comments, :in_progress_ids, :transitioned_ids, :retry_ids, :completed_steps_calls, :done_ids, :not_now_ids
 
     def initialize(issues)
       @issues = issues
@@ -102,6 +109,8 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
       @transitioned_ids = []
       @retry_ids = []
       @completed_steps_calls = []
+      @done_ids = []
+      @not_now_ids = []
     end
 
     def fetch_active_issues
@@ -134,6 +143,16 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
     def transition_to_retry(id, previous_state:)
       @retry_ids << { id: id, previous_state: previous_state }
       update_issue_state(id, previous_state)
+    end
+
+    def transition_to_done(id)
+      @done_ids << id
+      update_issue_state(id, "done")
+    end
+
+    def transition_to_not_now(id)
+      @not_now_ids << id
+      update_issue_state(id, "not_now")
     end
 
     private
@@ -365,6 +384,97 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
       id: "1",
       completed_steps: [ "Follow the first step", "Run the second step" ]
     } ], tracker.completed_steps_calls
+    assert_equal [ "1" ], tracker.transitioned_ids
+  end
+
+  test "merges PR for merging issues and comments on the card" do
+    issue = Symphony::Issue.new(
+      id: "1",
+      identifier: "CARD-1",
+      state: "merging",
+      pr_url: "https://github.com/org/repo/pull/7"
+    )
+    tracker = FakeTrackerClient.new([ issue ])
+    pull_request_creator = FakePullRequestCreator.new(
+      merge_result: OpenStruct.new(success: true, url: "https://github.com/org/repo/pull/7")
+    )
+    logger = TestLogger.new
+
+    orchestrator = Symphony::Orchestrator.new(
+      config: OpenStruct.new(max_concurrent_agents: 10, max_turns: 20),
+      workflow_loader: FakeWorkflowLoader.new,
+      tracker_client: tracker,
+      workspace_manager: FakeWorkspaceManager.new,
+      agent_runner: RecordingAgentRunner.new,
+      pull_request_creator: pull_request_creator,
+      logger: logger
+    )
+
+    orchestrator.tick
+
+    wait_until { tracker.comments.present? && tracker.done_ids == [ "1" ] }
+
+    assert_empty tracker.in_progress_ids
+    assert_equal [ { id: "1", body: "GitHub PR merged successfully: https://github.com/org/repo/pull/7" } ], tracker.comments
+    assert_equal [ "1" ], tracker.done_ids
+    assert_equal [], tracker.not_now_ids
+    assert_equal [ { pr_url: "https://github.com/org/repo/pull/7", workspace_path: Rails.root } ], pull_request_creator.merge_calls
+    assert logger.infos.any? { |message| message.include?("merged PR for CARD-1") }
+  end
+
+  test "moves merging issues to review and comments on merge failure" do
+    issue = Symphony::Issue.new(
+      id: "1",
+      identifier: "CARD-1",
+      state: "merging",
+      pr_url: "https://github.com/org/repo/pull/7"
+    )
+    tracker = FakeTrackerClient.new([ issue ])
+    pull_request_creator = FakePullRequestCreator.new(
+      merge_result: OpenStruct.new(success: false, error: "merge blocked by failing checks")
+    )
+    logger = TestLogger.new
+
+    orchestrator = Symphony::Orchestrator.new(
+      config: OpenStruct.new(max_concurrent_agents: 10, max_turns: 20),
+      workflow_loader: FakeWorkflowLoader.new,
+      tracker_client: tracker,
+      workspace_manager: FakeWorkspaceManager.new,
+      agent_runner: RecordingAgentRunner.new,
+      pull_request_creator: pull_request_creator,
+      logger: logger
+    )
+
+    orchestrator.tick
+
+    wait_until { tracker.comments.present? && tracker.transitioned_ids == [ "1" ] }
+
+    assert_empty tracker.in_progress_ids
+    assert_equal [ { id: "1", body: "GitHub PR merge failed: merge blocked by failing checks" } ], tracker.comments
+    assert_equal [ "1" ], tracker.transitioned_ids
+    assert_equal [], tracker.done_ids
+    assert logger.errors.any? { |message| message.include?("failed to merge PR for CARD-1") }
+  end
+
+  test "moves merging issues to review when no PR link is found" do
+    issue = Symphony::Issue.new(id: "1", identifier: "CARD-1", state: "merging", pr_url: nil)
+    tracker = FakeTrackerClient.new([ issue ])
+
+    orchestrator = Symphony::Orchestrator.new(
+      config: OpenStruct.new(max_concurrent_agents: 10, max_turns: 20),
+      workflow_loader: FakeWorkflowLoader.new,
+      tracker_client: tracker,
+      workspace_manager: FakeWorkspaceManager.new,
+      agent_runner: RecordingAgentRunner.new,
+      pull_request_creator: FakePullRequestCreator.new,
+      logger: TestLogger.new
+    )
+
+    orchestrator.tick
+
+    wait_until { tracker.comments.present? && tracker.transitioned_ids == [ "1" ] }
+
+    assert_equal [ { id: "1", body: "GitHub PR merge failed: No GitHub PR URL found in card comments" } ], tracker.comments
     assert_equal [ "1" ], tracker.transitioned_ids
   end
 

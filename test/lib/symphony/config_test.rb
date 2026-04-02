@@ -11,16 +11,16 @@ class Symphony::ConfigTest < ActiveSupport::TestCase
     ENV.delete("SYMPHONY_TEST_ACCOUNT")
   end
 
-  test "only includes active in default active states" do
+  test "includes active and merging in default active states" do
     config = Symphony::Config.new({ "tracker" => { "account_id" => "1234567" } })
 
-    assert_equal [ "active" ], config.tracker_active_states
+    assert_equal [ "active", "merging" ], config.tracker_active_states
   end
 
-  test "defaults active column names to todo and rework" do
+  test "defaults active column names to todo, rework, and merging" do
     config = Symphony::Config.new({ "tracker" => { "account_id" => "1234567" } })
 
-    assert_equal [ "Todo", "Rework" ], config.tracker_active_column_names
+    assert_equal [ "Todo", "Rework", "Merging" ], config.tracker_active_column_names
   end
 
   test "includes done in default terminal states" do

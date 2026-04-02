@@ -13,6 +13,8 @@ module Symphony
       IN_PROGRESS_COLUMN_NAME = "In Progress".freeze
       REWORK_COLUMN_NAME = "rework".freeze
       REWORK_COLUMN_LABEL = "Rework".freeze
+      MERGING_COLUMN_LABEL = "Merging".freeze
+      DONE_COLUMN_LABEL = "Done".freeze
 
       def initialize(account_id:, board_ids: nil, active_states:, active_column_names: nil, terminal_states:)
         @account = Account.find_by!(external_account_id: account_id)
@@ -85,6 +87,25 @@ module Symphony
 
         Current.set(account: @account, user: @account.system_user) do
           card.triage_into(retry_column)
+        end
+      end
+
+      def transition_to_done(issue_id)
+        card = scoped_cards.find(issue_id)
+        done_column = find_or_create_column(card.board, name: DONE_COLUMN_LABEL, color: "var(--color-card-3)")
+
+        return if card.column == done_column
+
+        Current.set(account: @account, user: @account.system_user) do
+          card.triage_into(done_column)
+        end
+      end
+
+      def transition_to_not_now(issue_id)
+        card = scoped_cards.find(issue_id)
+
+        Current.set(account: @account, user: @account.system_user) do
+          card.postpone
         end
       end
 
@@ -235,7 +256,9 @@ module Symphony
 
         def retry_active_column_name
           configured_retry_column = Array(@active_column_labels).find do |name|
-            !name.casecmp(REWORK_COLUMN_NAME).zero? && !name.casecmp(IN_PROGRESS_COLUMN_NAME).zero?
+            !name.casecmp(REWORK_COLUMN_NAME).zero? &&
+              !name.casecmp(IN_PROGRESS_COLUMN_NAME).zero? &&
+              !name.casecmp(MERGING_STATE).zero?
           end
 
           configured_retry_column || TODO_COLUMN_LABEL

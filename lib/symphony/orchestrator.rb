@@ -14,6 +14,7 @@ module Symphony
       @running = {}
       @claimed = Set.new
       @mutex = Mutex.new
+      @idle_condition = ConditionVariable.new
     end
 
     def tick
@@ -35,7 +36,24 @@ module Symphony
       raise
     end
 
+    def wait_until_idle(timeout: nil)
+      deadline = timeout ? Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout : nil
+
+      @mutex.synchronize do
+        until @running.empty?
+          break if deadline_reached?(deadline)
+
+          remaining = deadline && deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          @idle_condition.wait(@mutex, remaining || 0.1)
+        end
+      end
+    end
+
     private
+      def deadline_reached?(deadline)
+        deadline && Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+      end
+
       def sort_candidates(candidates)
         candidates.sort_by do |issue|
           [ issue.priority || 999, issue.created_at || Time.current, issue.identifier ]
@@ -54,6 +72,12 @@ module Symphony
         @logger.info("Symphony picking up #{issue.identifier} (state: #{issue.state})")
         emit_telemetry("symphony.issue.pickup", issue: issue, body: "Card picked up by orchestrator")
         log_issue_contents(issue)
+
+        if original_state == "merging"
+          dispatch_merge_async(issue)
+          return
+        end
+
         @tracker_client.transition_to_in_progress(issue.id)
         @logger.info("Symphony moved #{issue.identifier} to In Progress (state: #{current_state(issue.id)})")
         emit_telemetry("symphony.issue.transition", issue: issue, body: "Moved to In Progress", attributes: { target_state: "active" })
@@ -97,8 +121,37 @@ module Symphony
             @mutex.synchronize do
               @claimed.delete(issue.id)
               @running.delete(issue.id)
+              @idle_condition.broadcast if @running.empty?
             end
             @logger.info("Symphony agent thread finished for #{issue.identifier}; slot freed")
+          end
+        end
+      end
+
+      def dispatch_merge_async(issue)
+        Thread.new do
+          begin
+            @logger.info("Symphony merging PR for #{issue.identifier}")
+            emit_telemetry("symphony.pull_request.merge.start", issue: issue, body: "PR merge started", attributes: { pr_url: issue.pr_url })
+            result = merge_pull_request(issue)
+
+            if result.success
+              @tracker_client.add_comment(issue.id, body: "GitHub PR merged successfully: #{result.url}")
+              @tracker_client.transition_to_done(issue.id)
+              @logger.info("Symphony merged PR for #{issue.identifier}: #{result.url} (state: #{current_state(issue.id)})")
+              emit_telemetry("symphony.pull_request.merge.finish", issue: issue, body: "PR merge finished", attributes: { success: true, pr_url: result.url })
+            else
+              handle_merge_failure(issue, result.error)
+            end
+          rescue => error
+            handle_merge_failure(issue, "#{error.class}: #{error.message}")
+          ensure
+            @mutex.synchronize do
+              @claimed.delete(issue.id)
+              @running.delete(issue.id)
+              @idle_condition.broadcast if @running.empty?
+            end
+            @logger.info("Symphony merge thread finished for #{issue.identifier}; slot freed")
           end
         end
       end
@@ -158,6 +211,32 @@ module Symphony
           @logger.error("Symphony implementation finished for #{issue.identifier} but PR creation failed (state: #{current_state(issue.id)}): #{pull_request.error}")
           emit_telemetry("symphony.pull_request.failed", issue: issue, body: "PR creation failed", severity_text: "ERROR", attributes: { error: pull_request.error })
           transition_to_retry(issue, previous_state: previous_state)
+        end
+      end
+
+      def merge_pull_request(issue)
+        if issue.pr_url.blank?
+          return Symphony::PullRequestCreator::Result.new(success: false, error: "No GitHub PR URL found in card comments")
+        end
+
+        @pull_request_creator.merge(pr_url: issue.pr_url, workspace_path: Rails.root)
+      end
+
+      def handle_merge_failure(issue, error_message)
+        @logger.error("Symphony failed to merge PR for #{issue.identifier}: #{error_message}")
+        emit_telemetry("symphony.pull_request.merge.finish", issue: issue, body: "PR merge failed", severity_text: "ERROR", attributes: { success: false, error: error_message, pr_url: issue.pr_url })
+
+        begin
+          @tracker_client.add_comment(issue.id, body: "GitHub PR merge failed: #{error_message}")
+        rescue => error
+          @logger.error("Symphony failed to add merge failure comment for #{issue.identifier}: #{error.class}: #{error.message}")
+        end
+
+        begin
+          @tracker_client.transition_to_review(issue.id)
+          @logger.info("Symphony moved #{issue.identifier} to Review after merge failure (state: #{current_state(issue.id)})")
+        rescue => error
+          @logger.error("Symphony failed to move #{issue.identifier} to Review after merge failure: #{error.class}: #{error.message}")
         end
       end
 

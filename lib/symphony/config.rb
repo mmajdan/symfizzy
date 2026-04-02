@@ -5,8 +5,8 @@ module Symphony
     DEFAULTS = {
       "tracker" => {
         "kind" => "fizzy",
-        "active_states" => [ "active" ],
-        "active_column_names" => [ "Todo", "Rework" ],
+        "active_states" => [ "active", "merging" ],
+        "active_column_names" => [ "Todo", "Rework", "Merging" ],
         "terminal_states" => [ "closed", "not_now", "done" ]
       },
       "polling" => {

@@ -79,6 +79,22 @@ module Symphony
       true
     end
 
+    def merge(pr_url:, workspace_path:)
+      repo, pull_number = parse_pr_url!(pr_url)
+      cmd = [
+        "gh pr merge",
+        "--repo", Shellwords.escape(repo),
+        Shellwords.escape(pull_number),
+        "--merge",
+        "--delete-branch"
+      ].join(" ")
+
+      run_command!(workspace_path, cmd)
+      Result.new(success: true, url: pr_url)
+    rescue => error
+      Result.new(success: false, error: error.message)
+    end
+
     private
       def git_repository?(workspace_path)
         git_directory = Pathname(workspace_path).join(".git")

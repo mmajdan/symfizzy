@@ -112,6 +112,21 @@ class Symphony::FizzyClientTest < ActiveSupport::TestCase
     assert_equal "Review", card.reload.column.name
   end
 
+  test "transitions merged issue to done" do
+    client = Symphony::IssueTrackers::FizzyClient.new(
+      account_id: accounts(:"37s").external_account_id,
+      active_states: [ "active", "review", "merging" ],
+      terminal_states: [ "closed", "not_now", "done" ]
+    )
+
+    card = cards(:buy_domain)
+    card.update!(column: nil)
+
+    client.transition_to_done(card.id)
+
+    assert_equal "Done", card.reload.column.name
+  end
+
   test "transitions picked issue to in progress" do
     client = Symphony::IssueTrackers::FizzyClient.new(
       account_id: accounts(:"37s").external_account_id,
@@ -221,6 +236,22 @@ class Symphony::FizzyClientTest < ActiveSupport::TestCase
 
     assert_equal accounts(:"37s").system_user, comment.creator
     assert_equal "GitHub PR: https://github.com/example/repo/pull/123", comment.body.to_plain_text.strip
+  end
+
+  test "moves card to not now" do
+    client = Symphony::IssueTrackers::FizzyClient.new(
+      account_id: accounts(:"37s").external_account_id,
+      active_states: [ "active" ],
+      terminal_states: [ "closed", "not_now", "done" ]
+    )
+
+    card = cards(:buy_domain)
+    card.update!(column: columns(:writebook_review))
+
+    client.transition_to_not_now(card.id)
+
+    assert_predicate card.reload, :postponed?
+    assert_nil card.column
   end
 
   test "includes card steps in the symphony issue payload" do

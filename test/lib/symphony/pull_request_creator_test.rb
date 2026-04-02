@@ -237,4 +237,38 @@ class Symphony::PullRequestCreatorTest < ActiveSupport::TestCase
     assert_equal({ "GH_TOKEN" => "secret-token" }, gh_envs.first)
     assert_match(/gh pr comment --repo org\/repo 42 --body /, commands.first)
   end
+
+  test "merges PR with configured github token" do
+    creator = Symphony::PullRequestCreator.new(repo: "org/repo", base_branch: "main", github_token: "secret-token")
+    commands = []
+    gh_envs = []
+
+    original_capture2e = Open3.method(:capture2e)
+    Open3.define_singleton_method(:capture2e) do |*args, chdir:|
+      env, command = args.length == 2 ? args : [ {}, args.first ]
+      commands << command
+      gh_envs << env if command.start_with?("gh ")
+
+      case command
+      when "gh pr merge --repo org/repo 42 --merge --delete-branch"
+        [ "merged\n", Status.new(0) ]
+      else
+        raise "Unexpected command: #{command}"
+      end
+    end
+
+    begin
+      result = creator.merge(
+        pr_url: "https://github.com/org/repo/pull/42",
+        workspace_path: Rails.root
+      )
+    ensure
+      Open3.define_singleton_method(:capture2e, original_capture2e)
+    end
+
+    assert_predicate result, :success
+    assert_equal "https://github.com/org/repo/pull/42", result.url
+    assert_equal({ "GH_TOKEN" => "secret-token" }, gh_envs.first)
+    assert_equal "gh pr merge --repo org/repo 42 --merge --delete-branch", commands.first
+  end
 end

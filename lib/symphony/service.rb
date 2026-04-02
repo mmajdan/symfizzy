@@ -18,6 +18,7 @@ module Symphony
       if once
         puts "DEBUG: Running single tick"
         orchestrator.tick
+        orchestrator.wait_until_idle
       else
         puts "DEBUG: Starting main loop"
         loop do
