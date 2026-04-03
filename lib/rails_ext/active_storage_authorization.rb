@@ -23,7 +23,6 @@ module ActiveStorage::Authorize
 
   included do
     include Authentication
-
     # Ensure require_authentication runs after set_blob.
     skip_before_action :require_authentication
     before_action :require_authentication, :ensure_accessible, unless: :publicly_accessible_blob?
@@ -38,6 +37,10 @@ module ActiveStorage::Authorize
       unless @blob.accessible_to?(Current.user)
         head :forbidden
       end
+    end
+
+    def http_cache_forever(public: false, &block)
+      super(public: public && publicly_accessible_blob?, &block)
     end
 end
 

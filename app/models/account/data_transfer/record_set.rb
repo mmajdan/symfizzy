@@ -3,6 +3,7 @@ class Account::DataTransfer::RecordSet
   class ConflictError < IntegrityError; end
 
   IMPORT_BATCH_SIZE = 100
+  INTERNAL_RECORD_TYPES = %w[Export Account::Import].freeze
 
   attr_accessor :importable_model_names
   attr_reader :account, :model, :attributes
@@ -64,7 +65,7 @@ class Account::DataTransfer::RecordSet
     end
 
     def export_record(record)
-      zip.add_file "data/#{model_dir}/#{record.id}.json", record.to_json
+      zip.add_file "data/#{model_dir}/#{record.id}.json", record.attributes.slice(*attributes).to_json
     end
 
     def files
