@@ -2,12 +2,13 @@ module Symphony
   class PromptRenderer
     VARIABLE_PATTERN = /\{\{\s*([^}]+)\s*\}\}/.freeze
 
-    def render(template:, issue:, attempt:, turn_number:, max_turns:)
+    def render(template:, issue:, attempt:, turn_number:, max_turns:, previous_turn_output: nil)
       context = {
         "issue" => issue.to_template_payload,
         "attempt" => attempt,
         "turn_number" => turn_number,
-        "max_turns" => max_turns
+        "max_turns" => max_turns,
+        "previous_turn_output" => previous_turn_output
       }
 
       template.gsub(VARIABLE_PATTERN) do

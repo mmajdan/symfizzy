@@ -190,8 +190,8 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
     assert_equal [ "2" ], recording_runner.handled_ids
     assert_equal [ "1", "2" ], tracker.in_progress_ids
     assert_equal 2, tracker.retry_ids.size
-    assert_includes tracker.retry_ids,({ id: "1", previous_state: nil })
-    assert_includes tracker.retry_ids,({ id: "2", previous_state: nil })
+    assert_includes tracker.retry_ids, ({ id: "1", previous_state: nil })
+    assert_includes tracker.retry_ids, ({ id: "2", previous_state: nil })
     assert_empty tracker.comments
     assert_empty tracker.transitioned_ids
     assert_equal [ "CARD-1", "CARD-2" ], workspace_manager.handled_identifiers

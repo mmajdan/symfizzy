@@ -39,6 +39,24 @@ module Symphony
       end
     end
 
+    def commit_changes(path, message)
+      # Stage all changes
+      add_output, add_status = Open3.capture2e("git add -A", chdir: path.to_s)
+      return false unless add_status.success?
+
+      # Check if there are changes to commit
+      status_output, status_status = Open3.capture2e("git status --porcelain", chdir: path.to_s)
+      return true if status_output.blank? # Nothing to commit
+
+      # Commit with message
+      commit_output, commit_status = Open3.capture2e(
+        "git commit -m #{Shellwords.escape(message)}",
+        chdir: path.to_s
+      )
+
+      commit_status.success?
+    end
+
     private
       def build_workspace_path(identifier)
         prefix = workspace_prefix_for(identifier)
