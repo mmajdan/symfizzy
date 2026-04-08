@@ -23,7 +23,8 @@ module Symphony
 
       branch = issue.branch_name.presence || "symphony/#{issue.identifier.downcase}"
       title = "#{issue.identifier}: #{issue.title}"
-      body = "Automated changes for #{issue.identifier} by Symphony."
+      description = issue.description.presence || "Automated changes for #{issue.identifier} by Symphony."
+      body = "#{description}\n\nplease @codex review the PR"
 
       with_workspace_git(workspace_path, "checkout -B #{Shellwords.escape(branch)}")
       original_head = current_head(workspace_path)
