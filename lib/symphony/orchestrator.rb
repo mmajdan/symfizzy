@@ -1,4 +1,5 @@
 require "set"
+require "symphony/turn_state"
 
 module Symphony
   class Orchestrator
@@ -15,6 +16,7 @@ module Symphony
       @claimed = Set.new
       @mutex = Mutex.new
       @idle_condition = ConditionVariable.new
+      @turn_state_registry = TurnStateRegistry.new
     end
 
     def tick
@@ -26,7 +28,7 @@ module Symphony
 
       candidates.first(available_slots).each do |issue|
         begin
-          dispatch_issue_async(issue, workflow)
+          dispatch_issue(issue, workflow)
         rescue => error
           @logger.error("Symphony issue #{issue.identifier} failed to dispatch: #{error.class}: #{error.message}")
         end
@@ -60,7 +62,17 @@ module Symphony
         end
       end
 
-      def dispatch_issue_async(issue, workflow)
+      def dispatch_issue(issue, workflow)
+        if @turn_state_registry.active?(issue.id)
+          # Continue existing multi-turn sequence
+          continue_turn_async(issue, workflow)
+        else
+          # Start fresh sequence
+          start_turn_sequence_async(issue, workflow)
+        end
+      end
+
+      def start_turn_sequence_async(issue, workflow)
         return if @claimed.include?(issue.id)
 
         @mutex.synchronize do
@@ -87,45 +99,129 @@ module Symphony
         @logger.info("Symphony creating workspace for #{issue.identifier}...")
         workspace = @workspace_manager.create_for_issue(issue.identifier, branch_name: branch_name)
         @logger.info("Symphony workspace created for #{issue.identifier} at #{workspace.path}")
+
+        # Register turn state for this issue
+        @turn_state_registry.register(issue.id, workspace.path)
+
         emit_telemetry("symphony.workspace.checkout", issue: issue, body: "Repository checked out", attributes: { workspace_path: workspace.path.to_s })
-        prompt = PromptRenderer.new.render(
-          template: workflow.prompt_template,
-          issue: issue,
-          attempt: 0,
-          turn_number: 1,
-          max_turns: @config.max_turns
-        )
 
-        @logger.info("Symphony implementing #{issue.identifier} in #{workspace.path}")
-        emit_telemetry("symphony.agent.prompt", issue: issue, body: "Agent prompt rendered", attributes: { prompt: prompt })
-        emit_telemetry("symphony.agent.start", issue: issue, body: "Agent run started")
+        # Start first turn
+        run_turn_async(issue, workflow, original_state)
+      end
 
-        # Run agent asynchronously in a separate thread
+      def continue_turn_async(issue, workflow)
+        return if @claimed.include?(issue.id)
+
+        @mutex.synchronize do
+          @claimed.add(issue.id)
+          @running[issue.id] = issue
+        end
+
+        @logger.info("Symphony continuing multi-turn sequence for #{issue.identifier}")
+
+        # Run next turn
+        run_turn_async(issue, workflow, issue.state)
+      end
+
+      def run_turn_async(issue, workflow, original_state)
         Thread.new do
-          begin
-            result = @agent_runner.run(issue: issue, prompt: prompt, workspace_path: workspace.path)
+          turn_number = nil
 
-            if result.success
-              @logger.info("Symphony implementation finished for #{issue.identifier}; creating PR")
-              emit_telemetry("symphony.agent.finish", issue: issue, body: "Agent run finished", attributes: { success: true })
-              handle_success(issue, workspace.path, result, previous_state: original_state)
-            else
-              @logger.error("Symphony implementation failed for #{issue.identifier} (state: #{current_state(issue.id)}): #{result.error || result.stderr}")
-              emit_telemetry("symphony.agent.finish", issue: issue, body: "Agent run failed", severity_text: "ERROR", attributes: { success: false, error: result.error || result.stderr })
-              transition_to_retry(issue, previous_state: original_state)
+          begin
+            loop do
+              turn_state = @turn_state_registry.get(issue.id)
+              turn_number = turn_state&.current_turn || 1
+              prompt = PromptRenderer.new.render(
+                template: workflow.prompt_template,
+                issue: issue,
+                attempt: 0,
+                turn_number: turn_number,
+                max_turns: @config.max_turns,
+                previous_turn_output: turn_state&.previous_outputs&.last
+              )
+
+              @logger.info("Symphony implementing #{issue.identifier} turn #{turn_number}/#{@config.max_turns}")
+              emit_telemetry("symphony.agent.prompt", issue: issue, body: "Agent prompt rendered for turn #{turn_number}", attributes: { prompt: prompt, turn_number: turn_number })
+              emit_telemetry("symphony.agent.turn.start", issue: issue, body: "Agent turn #{turn_number} started", attributes: { turn_number: turn_number, max_turns: @config.max_turns })
+
+              workspace_path = turn_state&.workspace_path || "/tmp/#{issue.identifier}"
+              result = @agent_runner.run(issue: issue, prompt: prompt, workspace_path: workspace_path)
+
+              if result.success
+                break unless handle_turn_result(issue, result, original_state) == :continue
+              else
+                @logger.error("Symphony implementation failed for #{issue.identifier} turn #{turn_number}: #{result.error || result.stderr}")
+                emit_telemetry("symphony.agent.turn.finish", issue: issue, body: "Agent turn #{turn_number} failed", severity_text: "ERROR", attributes: { turn_number: turn_number, success: false, error: result.error || result.stderr })
+                transition_to_retry(issue, previous_state: original_state)
+                cleanup_turn_state(issue.id)
+                break
+              end
             end
           rescue => error
             @logger.error("Symphony agent thread failed for #{issue.identifier}: #{error.class}: #{error.message}")
             transition_to_retry(issue, previous_state: original_state)
+            cleanup_turn_state(issue.id)
           ensure
             @mutex.synchronize do
               @claimed.delete(issue.id)
               @running.delete(issue.id)
               @idle_condition.broadcast if @running.empty?
             end
-            @logger.info("Symphony agent thread finished for #{issue.identifier}; slot freed")
+            @logger.info("Symphony agent thread finished for #{issue.identifier} turn #{turn_number}; slot freed")
           end
         end
+      end
+
+      def handle_turn_result(issue, result, original_state)
+        turn_state = @turn_state_registry.get(issue.id)
+        current_turn = turn_state&.current_turn || 1
+        should_continue = result.summary&.continue == true
+
+        emit_telemetry("symphony.agent.turn.finish", issue: issue, body: "Agent turn #{current_turn} finished", attributes: { turn_number: current_turn, success: true, continue: should_continue })
+
+        if should_continue && current_turn < @config.max_turns
+          # Continue to next turn
+          @logger.info("Symphony continuing to turn #{current_turn + 1} for #{issue.identifier}")
+
+          # Auto-commit changes from this turn
+          workspace_path = turn_state.workspace_path
+          commit_message = "Turn #{current_turn} completed - #{issue.identifier}"
+          if @workspace_manager.commit_changes(workspace_path, commit_message)
+            @logger.info("Symphony auto-committed changes for #{issue.identifier} turn #{current_turn}")
+          end
+
+          # Increment turn and continue
+          @turn_state_registry.increment_turn(issue.id, result.stdout)
+          :continue
+        elsif should_continue && current_turn >= @config.max_turns
+          # Max turns exceeded
+          @logger.warn("Symphony max turns (#{@config.max_turns}) exceeded for #{issue.identifier}")
+          emit_telemetry("symphony.agent.multi_turn.complete", issue: issue, body: "Multi-turn sequence incomplete - max turns exceeded", severity_text: "WARN", attributes: { turns_completed: current_turn, max_turns: @config.max_turns })
+
+          # Add incomplete comment and move to review
+          begin
+            @tracker_client.add_comment(issue.id, body: "Implementation incomplete: reached maximum of #{@config.max_turns} turns without completion. Please review the work done so far.")
+            @logger.info("Symphony added incomplete comment for #{issue.identifier}")
+          rescue => error
+            @logger.error("Symphony failed to add incomplete comment for #{issue.identifier}: #{error.class}: #{error.message}")
+          end
+
+          @tracker_client.transition_to_review(issue.id)
+          @logger.info("Symphony moved #{issue.identifier} to Review after max turns exceeded (state: #{current_state(issue.id)})")
+          cleanup_turn_state(issue.id)
+          :complete
+        else
+          # Agent finished (continue: false or not specified)
+          @logger.info("Symphony implementation finished for #{issue.identifier}; creating PR")
+          emit_telemetry("symphony.agent.finish", issue: issue, body: "Agent run finished", attributes: { success: true, turns_completed: current_turn })
+          handle_success(issue, turn_state.workspace_path, result, previous_state: original_state)
+          cleanup_turn_state(issue.id)
+          :complete
+        end
+      end
+
+      def cleanup_turn_state(issue_id)
+        @turn_state_registry.remove(issue_id)
       end
 
       def dispatch_merge_async(issue)
@@ -219,7 +315,8 @@ module Symphony
           return Symphony::PullRequestCreator::Result.new(success: false, error: "No GitHub PR URL found in card comments")
         end
 
-        @pull_request_creator.merge(pr_url: issue.pr_url, workspace_path: Rails.root)
+        workspace = @workspace_manager.create_for_issue(issue.identifier, branch_name: issue.branch_name)
+        @pull_request_creator.merge(pr_url: issue.pr_url, workspace_path: workspace.path)
       end
 
       def handle_merge_failure(issue, error_message)
@@ -256,7 +353,6 @@ module Symphony
 
         @logger.info("Symphony card contents for #{issue.identifier}: #{details.join(" ")}")
       end
-
 
       def emit_telemetry(name, issue:, body:, severity_text: "INFO", attributes: {})
         @telemetry_logger&.event(

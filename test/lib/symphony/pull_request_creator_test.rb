@@ -201,7 +201,7 @@ class Symphony::PullRequestCreatorTest < ActiveSupport::TestCase
     end
 
     assert_predicate result, :success
-    assert_equal [({ "GH_TOKEN" => "secret-token" })], gh_envs
+    assert_equal [ ({ "GH_TOKEN" => "secret-token" }) ], gh_envs
   end
 
   test "adds PR comment with configured github token" do
@@ -238,22 +238,25 @@ class Symphony::PullRequestCreatorTest < ActiveSupport::TestCase
     assert_match(/gh pr comment --repo org\/repo 42 --body /, commands.first)
   end
 
-  test "merges PR with configured github token" do
+  test "merges PR with configured github token when mergeable" do
     creator = Symphony::PullRequestCreator.new(repo: "org/repo", base_branch: "main", github_token: "secret-token")
     commands = []
     gh_envs = []
 
     original_capture2e = Open3.method(:capture2e)
     Open3.define_singleton_method(:capture2e) do |*args, chdir:|
-      env, command = args.length == 2 ? args : [ {}, args.first ]
+      env = args.length == 2 ? args[0] : {}
+      command = args.length == 2 ? args[1] : args[0]
       commands << command
-      gh_envs << env if command.start_with?("gh ")
+      gh_envs << env if command.to_s.start_with?("gh ")
 
-      case command
+      case command.to_s
+      when "gh pr view --repo org/repo 42 --json mergeStateStatus"
+        [ '{"mergeStateStatus":"CLEAN"}', Status.new(0) ]
       when "gh pr merge --repo org/repo 42 --merge --delete-branch"
-        [ "merged\n", Status.new(0) ]
+        [ "merged", Status.new(0) ]
       else
-        raise "Unexpected command: #{command}"
+        raise "Unexpected command: #{command.inspect}"
       end
     end
 
@@ -269,6 +272,84 @@ class Symphony::PullRequestCreatorTest < ActiveSupport::TestCase
     assert_predicate result, :success
     assert_equal "https://github.com/org/repo/pull/42", result.url
     assert_equal({ "GH_TOKEN" => "secret-token" }, gh_envs.first)
-    assert_equal "gh pr merge --repo org/repo 42 --merge --delete-branch", commands.first
+    assert_includes commands, "gh pr merge --repo org/repo 42 --merge --delete-branch"
+    assert_includes commands, "gh pr view --repo org/repo 42 --json mergeStateStatus"
+  end
+
+  test "attempts conflict resolution when PR is not mergeable" do
+    creator = Symphony::PullRequestCreator.new(repo: "org/repo", base_branch: "main", github_token: "secret-token")
+    commands = []
+
+    original_capture2e = Open3.method(:capture2e)
+    Open3.define_singleton_method(:capture2e) do |*args, chdir:|
+      env = args.length == 2 ? args[0] : {}
+      command = args.length == 2 ? args[1] : args[0]
+      commands << command
+
+      case command.to_s
+      when "gh pr view --repo org/repo 42 --json mergeStateStatus"
+        [ '{"mergeStateStatus":"DIRTY"}', Status.new(0) ]
+      when "gh pr view --repo org/repo 42 --json headRefName,baseRefName"
+        [ '{"headRefName":"feature-branch","baseRefName":"main"}', Status.new(0) ]
+      when /git fetch origin main/
+        [ "", Status.new(0) ]
+      when /git fetch origin feature-branch/
+        [ "", Status.new(0) ]
+      when /git checkout/
+        [ "", Status.new(0) ]
+      when /git merge origin\/main/
+        [ "Auto-merging file.txt", Status.new(0) ]
+      when "git diff --name-only --diff-filter=U"
+        [ "", Status.new(0) ]
+      when "git add -A"
+        [ "", Status.new(0) ]
+      when /git commit/
+        [ "", Status.new(0) ]
+      when /git push origin/
+        [ "", Status.new(0) ]
+      when "gh pr merge --repo org/repo 42 --merge --delete-branch"
+        [ "merged", Status.new(0) ]
+      else
+        raise "Unexpected command: #{command.inspect}"
+      end
+    end
+
+    begin
+      result = creator.merge(
+        pr_url: "https://github.com/org/repo/pull/42",
+        workspace_path: Rails.root
+      )
+    ensure
+      Open3.define_singleton_method(:capture2e, original_capture2e)
+    end
+
+    assert_predicate result, :success
+    assert_includes commands, "gh pr view --repo org/repo 42 --json mergeStateStatus"
+    assert_includes commands, "gh pr view --repo org/repo 42 --json headRefName,baseRefName"
+  end
+
+  test "resolve_conflict_file strips markers and keeps both hunks" do
+    creator = Symphony::PullRequestCreator.new(repo: "org/repo", base_branch: "main")
+    Dir.mktmpdir do |workspace|
+      file = File.join(workspace, "conflicted.txt")
+      File.write(file, <<~TEXT)
+        before
+        <<<<<<< HEAD
+        from_head
+        =======
+        from_base
+        >>>>>>> origin/main
+        after
+      TEXT
+
+      creator.resolve_conflict_file(workspace, "conflicted.txt")
+
+      assert_equal <<~TEXT, File.read(file)
+        before
+        from_head
+        from_base
+        after
+      TEXT
+    end
   end
 end

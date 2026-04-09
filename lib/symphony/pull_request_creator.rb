@@ -1,6 +1,7 @@
 require "open3"
 require "shellwords"
 require "uri"
+require "json"
 
 module Symphony
   class PullRequestCreator
@@ -82,6 +83,127 @@ module Symphony
 
     def merge(pr_url:, workspace_path:)
       repo, pull_number = parse_pr_url!(pr_url)
+
+      # Step 1: Check if PR is mergeable
+      mergeable = check_mergeable(repo, pull_number, workspace_path)
+
+      if mergeable
+        # Simple merge
+        perform_merge(repo, pull_number, workspace_path, pr_url)
+      else
+        # Step 2: Attempt conflict resolution
+        resolve_result = resolve_conflicts(repo, pull_number, workspace_path)
+
+        if resolve_result[:success]
+          # Retry merge after conflict resolution
+          perform_merge(repo, pull_number, workspace_path, pr_url)
+        else
+          Result.new(success: false, error: "Cannot merge PR: #{resolve_result[:error]}")
+        end
+      end
+    rescue => error
+      Result.new(success: false, error: error.message)
+    end
+
+    def check_mergeable(repo, pull_number, workspace_path)
+      cmd = [
+        "gh pr view",
+        "--repo", Shellwords.escape(repo),
+        Shellwords.escape(pull_number),
+        "--json", "mergeStateStatus"
+      ].join(" ")
+
+      output = run_command!(workspace_path, cmd)
+      data = JSON.parse(output)
+      merge_state = data["mergeStateStatus"].to_s.downcase
+
+      # CLEAN means no conflicts, ready to merge
+      merge_state == "clean"
+    rescue
+      false
+    end
+
+    def resolve_conflicts(repo, pull_number, workspace_path)
+      begin
+        # Get PR details
+        cmd = [
+          "gh pr view",
+          "--repo", Shellwords.escape(repo),
+          Shellwords.escape(pull_number),
+          "--json", "headRefName,baseRefName"
+        ].join(" ")
+
+        output = run_command!(workspace_path, cmd)
+        data = JSON.parse(output)
+        head_branch = data["headRefName"]
+        base_branch = data["baseRefName"] || @base_branch
+
+        # Fetch latest base branch
+        run_command!(workspace_path, "git fetch origin #{Shellwords.escape(base_branch)}")
+
+        # Checkout PR branch
+        run_command!(workspace_path, "git fetch origin #{Shellwords.escape(head_branch)}")
+        run_command!(workspace_path, "git checkout -B #{Shellwords.escape(head_branch)} origin/#{Shellwords.escape(head_branch)}")
+
+        # Attempt merge of base branch into PR branch
+        merge_output, merge_status = Open3.capture2e(
+          command_env,
+          "git merge origin/#{Shellwords.escape(base_branch)} --no-edit",
+          chdir: workspace_path.to_s
+        )
+
+        if merge_status.success?
+          # No conflicts, push the merge commit
+          run_command!(workspace_path, "git push origin #{Shellwords.escape(head_branch)}")
+          return { success: true }
+        end
+
+        # Conflicts exist - try to resolve by keeping both changes
+        conflict_files = get_conflict_files(workspace_path)
+
+        if conflict_files.empty?
+          return { success: false, error: "Merge failed but no conflict files found" }
+        end
+
+        # For each conflicted file, resolve by accepting both changes
+        conflict_files.each do |file|
+          resolve_conflict_file(workspace_path, file)
+        end
+
+        # Complete the merge
+        run_command!(workspace_path, "git add -A")
+        run_command!(workspace_path, "git commit -m \"Resolve merge conflicts\" --no-edit")
+        run_command!(workspace_path, "git push origin #{Shellwords.escape(head_branch)}")
+
+        { success: true }
+      rescue => error
+        { success: false, error: error.message }
+      end
+    end
+
+    def get_conflict_files(workspace_path)
+      output, status = Open3.capture2e("git diff --name-only --diff-filter=U", chdir: workspace_path.to_s)
+      return [] unless status.success?
+
+      output.lines.map(&:strip).reject(&:empty?)
+    end
+
+    def resolve_conflict_file(workspace_path, file)
+      file_path = File.join(workspace_path, file)
+      return unless File.exist?(file_path)
+
+      content = File.read(file_path)
+
+      # Remove conflict markers, keeping both versions
+      # This is a simple resolution strategy - accept both changes
+      resolved = content.gsub(/^<<<<<<<[^\n]*\n(.*?)^=======\n(.*?)^>>>>>>>[^\n]*\n?/m) do
+        "#{Regexp.last_match(1)}#{Regexp.last_match(2)}"
+      end
+
+      File.write(file_path, resolved)
+    end
+
+    def perform_merge(repo, pull_number, workspace_path, pr_url)
       cmd = [
         "gh pr merge",
         "--repo", Shellwords.escape(repo),
@@ -92,8 +214,6 @@ module Symphony
 
       run_command!(workspace_path, cmd)
       Result.new(success: true, url: pr_url)
-    rescue => error
-      Result.new(success: false, error: error.message)
     end
 
     private

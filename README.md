@@ -292,6 +292,41 @@ To load the workflow from another directory:
 SYMPHONY_WORKFLOW_PATH=/path/to/workflow-dir bin/rails symphony:run
 ```
 
+### Multi-Turn Agent Execution
+
+Symphony supports multi-turn agent execution for complex tasks that require multiple iterations. Agents can request additional turns by including `"continue": true` in their structured summary:
+
+```json
+SYMPHONY_SUMMARY_START
+{
+  "summary": "Partial work completed, need to run tests",
+  "continue": true
+}
+SYMPHONY_SUMMARY_END
+```
+
+**How it works:**
+- Each turn auto-commits changes with message "Turn N completed"
+- The agent receives previous turn output via the `{{ previous_turn_output }}` template variable
+- Agent slots are held continuously during multi-turn sequences
+- When `max_turns` is reached without completion, the card moves to Review with an "incomplete" comment
+
+**Configuration:**
+Set `max_turns` in your WORKFLOW.md:
+
+```yaml
+agent:
+  max_concurrent_agents: 2
+  max_turns: 8
+```
+
+**Template variables:**
+- `{{ turn_number }}` - Current turn (1 to max_turns)
+- `{{ max_turns }}` - Maximum allowed turns
+- `{{ previous_turn_output }}` - Output from the previous turn (empty on first turn)
+
+The agent decides when to stop by omitting `"continue": true` or setting it to `false`.
+
 ### Symphony card state mapping
 
 For the Fizzy tracker adapter, Symphony maps cards to logical states like this:

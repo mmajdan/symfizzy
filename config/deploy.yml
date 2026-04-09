@@ -1,39 +1,26 @@
-# Name of this app
+# Symfizzy - Deployed with external Caddy on standard HTTPS port
 service: fizzy
 image: mmajdan/fizzy
 
-
-#-- About your deployment --#
-
-# Where to deploy fizzy
 servers:
   web:
-    - nexus.majdan.online
+    hosts:
+      - nexus.majdan.online
+    proxy: false
+    options:
+      publish: 8007:80
   symphony:
     hosts:
       - nexus.majdan.online
     cmd: bin/rails symphony:run
     proxy: false
 
-# How you connect to your server
 ssh:
   user: mmajdan
 
-# Automatic SSL
-proxy:
-  app_port: 3000
-  ssl:
-    certificate_pem: CERTIFICATE_PEM
-    private_key_pem: PRIVATE_KEY_PEM
-  forward_headers: true
-  host: nexus.majdan.online
-  run:
-    http_port: 3000
-    https_port: 3443
-    bind_ips:
-      - 127.0.0.1
+# External Caddy handles SSL and reverse proxy on standard HTTPS port (443)
+# Rails app runs on port 8007 (accessible via Docker network)
 
-# Your application configuration (secrets come from .kamal/secrets).
 env:
   secret:
     - SECRET_KEY_BASE
@@ -43,33 +30,27 @@ env:
     - SMTP_PASSWORD
     - GH_TOKEN
   clear:
-    BASE_URL: https://nexus.majdan.online # The public URL of your Fizzy instance
-    MAILER_FROM_ADDRESS: fizzy@mg.majdan.online # The email "from" address that Fizzy sends email from
-    SMTP_ADDRESS: smtp.eu.mailgun.org # The SMTP server you'll use to send email
-    SMTP_PORT: 587 # Mailgun submission port
-    SMTP_TLS: false # Use STARTTLS for outbound mail
-    MULTI_TENANT: false # Set to true to allow multiple accounts to sign up
-    SOLID_QUEUE_IN_PUMA: true # Run background jobs in the app container
-    ASSUME_SSL: true # Trust HTTPS termination at Caddy
-    FORCE_SSL: false # Keep Kamal's internal HTTP health checks from redirecting
+    BASE_URL: https://nexus.majdan.online
+    MAILER_FROM_ADDRESS: fizzy@mg.majdan.online
+    SMTP_ADDRESS: smtp.eu.mailgun.org
+    SMTP_PORT: 587
+    SMTP_TLS: false
+    MULTI_TENANT: false
+    SOLID_QUEUE_IN_PUMA: true
+    ASSUME_SSL: true
+    FORCE_SSL: true
     GIT_AUTHOR_NAME: Symphony
     GIT_AUTHOR_EMAIL: symphony@nexus.majdan.online
     GIT_COMMITTER_NAME: Symphony
     GIT_COMMITTER_EMAIL: symphony@nexus.majdan.online
-    SYMPHONY_WORKFLOW_PATH: /rails/symphony # Directory containing WORKFLOW.md for the Symphony worker
+    SYMPHONY_WORKFLOW_PATH: /rails/symphony
 
-
-#-- General configuration --#
-
-# Use a local registry to deploy
 registry:
   server: ghcr.io
   username: mmajdan
   password:
     - GH_TOKEN
 
-# Handy aliases for interacting with your deployment. For example: `bin/kamal console` will connect to a
-# Rails console in production.
 aliases:
   console: app exec --interactive --reuse "bin/rails console"
   shell: app exec --interactive --reuse "bash"
@@ -78,19 +59,13 @@ aliases:
   symphony_shell: app exec -r symphony --interactive --reuse "bash"
   dbc: app exec --interactive --reuse "bin/rails dbconsole --include-password"
 
-# Use a persistent storage volume for sqlite database files and local Active Storage files.
-# Recommended to change this to a mounted volume path that is backed up off server.
 volumes:
   - "fizzy_storage:/rails/storage"
   - "fizzy_symphony_workspaces:/rails/tmp/symphony_workspaces"
   - "/home/mmajdan/workflows:/rails/symphony:ro"
 
-# Bridge fingerprinted assets, like JS and CSS, between versions to avoid
-# hitting 404 on in-flight requests. Combines all files from new and old
-# version inside the asset_path.
 asset_path: /rails/public/assets
 
-# Configure the image builder.
 builder:
   arch: amd64
   context: .

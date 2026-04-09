@@ -8,7 +8,7 @@ module Symphony
     SUMMARY_START_MARKER = "SYMPHONY_SUMMARY_START".freeze
     SUMMARY_END_MARKER = "SYMPHONY_SUMMARY_END".freeze
 
-    Summary = Struct.new(:overview, :files_changed, :tests_run, :notes, :completed_steps, keyword_init: true)
+    Summary = Struct.new(:overview, :files_changed, :tests_run, :notes, :completed_steps, :continue, keyword_init: true)
     Result = Struct.new(:success, :status, :stdout, :stderr, :error, :auth_mode, :summary, :output_paths, :summary_status, :agent_output, keyword_init: true)
     CHATGPT_LOGIN_MODE = "chatgpt_login".freeze
     API_KEY_MODE = "api_key".freeze
@@ -295,7 +295,8 @@ module Symphony
             files_changed: string_list(parsed["files_changed"]),
             tests_run: string_list(parsed["tests_run"]),
             notes: string_list(parsed["notes"]),
-            completed_steps: string_list(parsed["completed_steps"])
+            completed_steps: string_list(parsed["completed_steps"]),
+            continue: parsed["continue"] == true
           ),
           "parsed" ]
       rescue JSON::ParserError
