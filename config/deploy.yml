@@ -14,6 +14,18 @@ servers:
       - nexus.majdan.online
     cmd: bin/rails symphony:run
     proxy: false
+  symfizzy:
+    hosts:
+      - nexus.majdan.online
+    cmd: /app/symfizzy/start.sh
+    proxy:
+      app_port: 8080
+      ssl:
+        certificate_pem: CERTIFICATE_PEM
+        private_key_pem: PRIVATE_KEY_PEM
+      host: ovms.nexus.majdan.online
+    builder:
+      dockerfile: Dockerfile.symfizzy
 
 # How you connect to your server
 ssh:
@@ -57,6 +69,11 @@ env:
     GIT_COMMITTER_NAME: Symphony
     GIT_COMMITTER_EMAIL: symphony@nexus.majdan.online
     SYMPHONY_WORKFLOW_PATH: /rails/symphony # Directory containing WORKFLOW.md for the Symphony worker
+    MODEL_NAME: openai-model
+    OVMS_HOST: localhost
+    OVMS_PORT: 9000
+    OVMS_REST_PORT: 8001
+    SYMFIZZY_PORT: 8080
 
 
 #-- General configuration --#
@@ -76,6 +93,8 @@ aliases:
   logs: app logs -f
   symphony_logs: app logs -r symphony -f
   symphony_shell: app exec -r symphony --interactive --reuse "bash"
+  symfizzy_logs: app logs -r symfizzy -f
+  symfizzy_shell: app exec -r symfizzy --interactive --reuse "bash"
   dbc: app exec --interactive --reuse "bin/rails dbconsole --include-password"
 
 # Use a persistent storage volume for sqlite database files and local Active Storage files.
@@ -84,6 +103,7 @@ volumes:
   - "fizzy_storage:/rails/storage"
   - "fizzy_symphony_workspaces:/rails/tmp/symphony_workspaces"
   - "/home/mmajdan/workflows:/rails/symphony:ro"
+  - "fizzy_ovms_models:/app/models"
 
 # Bridge fingerprinted assets, like JS and CSS, between versions to avoid
 # hitting 404 on in-flight requests. Combines all files from new and old

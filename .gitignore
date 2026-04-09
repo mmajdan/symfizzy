@@ -50,3 +50,15 @@
 /workflows
 
 /local_workflows
+
+# Symfizzy - OpenVINO Model Server
+/symfizzy/venv/
+/symfizzy/__pycache__/
+/symfizzy/*.py[cod]
+/symfizzy/*$py.class
+/symfizzy/*.so
+/symfizzy/ovms/
+/symfizzy/ovms.tar.gz
+/symfizzy/models/*
+!/symfizzy/models/.gitkeep
+!/symfizzy/models/.keep

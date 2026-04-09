@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+
+# Symfizzy local development helper script
+# This script helps run and manage the symfizzy service locally
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SYMFIZZY_DIR="${SCRIPT_DIR}/symfizzy"
+
+cd "${SCRIPT_DIR}"
+
+case "${1:-}" in
+  setup)
+    echo "Setting up Symfizzy..."
+    cd "${SYMFIZZY_DIR}"
+    
+    # Create virtual environment
+    if [ ! -d "venv" ]; then
+      echo "Creating Python virtual environment..."
+      python3 -m venv venv
+    fi
+    
+    # Activate and install dependencies
+    source venv/bin/activate
+    pip install --upgrade pip
+    pip install -r requirements.txt
+    
+    echo "Symfizzy setup complete!"
+    echo "Run 'bin/symfizzy start' to start the service."
+    ;;
+    
+  start)
+    echo "Starting Symfizzy..."
+    cd "${SYMFIZZY_DIR}"
+    
+    if [ ! -d "venv" ]; then
+      echo "Virtual environment not found. Run 'bin/symfizzy setup' first."
+      exit 1
+    fi
+    
+    exec ./start.sh
+    ;;
+    
+  docker-build)
+    echo "Building Symfizzy Docker image..."
+    docker build -f Dockerfile.symfizzy -t symfizzy:latest .
+    echo "Docker image built: symfizzy:latest"
+    ;;
+    
+  docker-run)
+    echo "Running Symfizzy in Docker..."
+    docker run -d \
+      --name symfizzy \
+      -p 8080:8080 \
+      -p 9000:9000 \
+      -p 8001:8001 \
+      -v "$(pwd)/symfizzy/models:/app/models" \
+      symfizzy:latest
+    echo "Symfizzy started on http://localhost:8080"
+    ;;
+    
+  docker-stop)
+    echo "Stopping Symfizzy Docker container..."
+    docker stop symfizzy 2>/dev/null || true
+    docker rm symfizzy 2>/dev/null || true
+    echo "Symfizzy stopped."
+    ;;
+    
+  test)
+    echo "Testing Symfizzy API..."
+    curl -s http://localhost:8080/health | jq . || echo "Failed to connect. Is Symfizzy running?"
+    ;;
+    
+  *)
+    cat << EOF
+Symfizzy - OpenVINO Model Server for OpenAI API
+
+Usage: bin/symfizzy <command>
+
+Commands:
+  setup         Set up Python virtual environment and dependencies
+  start         Start Symfizzy locally
+  docker-build  Build Docker image
+  docker-run    Run Symfizzy in Docker
+  docker-stop   Stop Docker container
+  test          Test API health endpoint
+
+Environment Variables:
+  MODEL_NAME       Model name (default: openai-model)
+  SYMFIZZY_PORT    API port (default: 8080)
+  OVMS_PORT        OVMS gRPC port (default: 9000)
+  OVMS_REST_PORT   OVMS REST port (default: 8001)
+
+Examples:
+  bin/symfizzy setup
+  bin/symfizzy start
+  bin/symfizzy docker-build && bin/symfizzy docker-run
+  curl http://localhost:8080/v1/models
+EOF
+    ;;
+esac
