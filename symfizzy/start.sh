@@ -7,7 +7,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="${SCRIPT_DIR}/venv"
 OVMS_DIR="${SCRIPT_DIR}/ovms"
-MODELS_DIR="${SCRIPT_DIR}/models"
+MODELS_DIR="${MODELS_DIR:-/app/models}"
 
 # Configuration
 OVMS_VERSION="${OVMS_VERSION:-2024.3}"

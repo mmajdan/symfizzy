@@ -55,6 +55,20 @@ class ChatCompletionResponse(BaseModel):
     choices: List[ChatCompletionChoice]
     usage: Dict[str, int]
 
+class CompletionChoice(BaseModel):
+    text: str
+    index: int
+    logprobs: Optional[Any] = None
+    finish_reason: str
+
+class CompletionResponse(BaseModel):
+    id: str
+    object: str = "text_completion"
+    created: int
+    model: str
+    choices: List[CompletionChoice]
+    usage: Dict[str, int]
+
 class ModelInfo(BaseModel):
     id: str
     object: str = "model"
@@ -231,6 +245,9 @@ async def chat_completions(request: ChatCompletionRequest):
 @app.post("/v1/completions")
 async def completions(request: Request):
     """Legacy completions endpoint"""
+    import time
+    import uuid
+
     body = await request.json()
     prompt = body.get("prompt", "")
     model = body.get("model", MODEL_NAME)
@@ -244,7 +261,25 @@ async def completions(request: Request):
         stream=body.get("stream", False)
     )
     
-    return await chat_completions(chat_request)
+    chat_response = await chat_completions(chat_request)
+
+    completion_text = ""
+    if chat_response.choices:
+        completion_text = chat_response.choices[0].message.content
+
+    return CompletionResponse(
+        id=f"cmpl-{uuid.uuid4().hex[:8]}",
+        created=int(time.time()),
+        model=model,
+        choices=[
+            CompletionChoice(
+                text=completion_text,
+                index=0,
+                finish_reason="stop"
+            )
+        ],
+        usage=chat_response.usage
+    )
 
 if __name__ == "__main__":
     uvicorn.run(
