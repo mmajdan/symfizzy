@@ -124,34 +124,38 @@ module Symphony
       end
 
       def run_turn_async(issue, workflow, original_state)
-        turn_state = @turn_state_registry.get(issue.id)
-        turn_number = turn_state&.current_turn || 1
-
         Thread.new do
+          turn_number = nil
+
           begin
-            prompt = PromptRenderer.new.render(
-              template: workflow.prompt_template,
-              issue: issue,
-              attempt: 0,
-              turn_number: turn_number,
-              max_turns: @config.max_turns,
-              previous_turn_output: turn_state&.previous_outputs&.last
-            )
+            loop do
+              turn_state = @turn_state_registry.get(issue.id)
+              turn_number = turn_state&.current_turn || 1
+              prompt = PromptRenderer.new.render(
+                template: workflow.prompt_template,
+                issue: issue,
+                attempt: 0,
+                turn_number: turn_number,
+                max_turns: @config.max_turns,
+                previous_turn_output: turn_state&.previous_outputs&.last
+              )
 
-            @logger.info("Symphony implementing #{issue.identifier} turn #{turn_number}/#{@config.max_turns}")
-            emit_telemetry("symphony.agent.prompt", issue: issue, body: "Agent prompt rendered for turn #{turn_number}", attributes: { prompt: prompt, turn_number: turn_number })
-            emit_telemetry("symphony.agent.turn.start", issue: issue, body: "Agent turn #{turn_number} started", attributes: { turn_number: turn_number, max_turns: @config.max_turns })
+              @logger.info("Symphony implementing #{issue.identifier} turn #{turn_number}/#{@config.max_turns}")
+              emit_telemetry("symphony.agent.prompt", issue: issue, body: "Agent prompt rendered for turn #{turn_number}", attributes: { prompt: prompt, turn_number: turn_number })
+              emit_telemetry("symphony.agent.turn.start", issue: issue, body: "Agent turn #{turn_number} started", attributes: { turn_number: turn_number, max_turns: @config.max_turns })
 
-            workspace_path = turn_state&.workspace_path || "/tmp/#{issue.identifier}"
-            result = @agent_runner.run(issue: issue, prompt: prompt, workspace_path: workspace_path)
+              workspace_path = turn_state&.workspace_path || "/tmp/#{issue.identifier}"
+              result = @agent_runner.run(issue: issue, prompt: prompt, workspace_path: workspace_path)
 
-            if result.success
-              handle_turn_result(issue, workflow, result, original_state, turn_state)
-            else
-              @logger.error("Symphony implementation failed for #{issue.identifier} turn #{turn_number}: #{result.error || result.stderr}")
-              emit_telemetry("symphony.agent.turn.finish", issue: issue, body: "Agent turn #{turn_number} failed", severity_text: "ERROR", attributes: { turn_number: turn_number, success: false, error: result.error || result.stderr })
-              transition_to_retry(issue, previous_state: original_state)
-              cleanup_turn_state(issue.id)
+              if result.success
+                break unless handle_turn_result(issue, result, original_state) == :continue
+              else
+                @logger.error("Symphony implementation failed for #{issue.identifier} turn #{turn_number}: #{result.error || result.stderr}")
+                emit_telemetry("symphony.agent.turn.finish", issue: issue, body: "Agent turn #{turn_number} failed", severity_text: "ERROR", attributes: { turn_number: turn_number, success: false, error: result.error || result.stderr })
+                transition_to_retry(issue, previous_state: original_state)
+                cleanup_turn_state(issue.id)
+                break
+              end
             end
           rescue => error
             @logger.error("Symphony agent thread failed for #{issue.identifier}: #{error.class}: #{error.message}")
@@ -168,7 +172,8 @@ module Symphony
         end
       end
 
-      def handle_turn_result(issue, workflow, result, original_state, turn_state)
+      def handle_turn_result(issue, result, original_state)
+        turn_state = @turn_state_registry.get(issue.id)
         current_turn = turn_state&.current_turn || 1
         should_continue = result.summary&.continue == true
 
@@ -187,16 +192,7 @@ module Symphony
 
           # Increment turn and continue
           @turn_state_registry.increment_turn(issue.id, result.stdout)
-
-          # Release slot and schedule next turn
-          @mutex.synchronize do
-            @claimed.delete(issue.id)
-            @running.delete(issue.id)
-            @idle_condition.broadcast if @running.empty?
-          end
-
-          # Immediately dispatch next turn
-          dispatch_issue(issue, workflow)
+          :continue
         elsif should_continue && current_turn >= @config.max_turns
           # Max turns exceeded
           @logger.warn("Symphony max turns (#{@config.max_turns}) exceeded for #{issue.identifier}")
@@ -213,12 +209,14 @@ module Symphony
           @tracker_client.transition_to_review(issue.id)
           @logger.info("Symphony moved #{issue.identifier} to Review after max turns exceeded (state: #{current_state(issue.id)})")
           cleanup_turn_state(issue.id)
+          :complete
         else
           # Agent finished (continue: false or not specified)
           @logger.info("Symphony implementation finished for #{issue.identifier}; creating PR")
           emit_telemetry("symphony.agent.finish", issue: issue, body: "Agent run finished", attributes: { success: true, turns_completed: current_turn })
           handle_success(issue, turn_state.workspace_path, result, previous_state: original_state)
           cleanup_turn_state(issue.id)
+          :complete
         end
       end
 
@@ -317,7 +315,8 @@ module Symphony
           return Symphony::PullRequestCreator::Result.new(success: false, error: "No GitHub PR URL found in card comments")
         end
 
-        @pull_request_creator.merge(pr_url: issue.pr_url, workspace_path: Rails.root)
+        workspace = @workspace_manager.create_for_issue(issue.identifier, branch_name: issue.branch_name)
+        @pull_request_creator.merge(pr_url: issue.pr_url, workspace_path: workspace.path)
       end
 
       def handle_merge_failure(issue, error_message)

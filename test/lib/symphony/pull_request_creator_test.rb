@@ -327,4 +327,29 @@ class Symphony::PullRequestCreatorTest < ActiveSupport::TestCase
     assert_includes commands, "gh pr view --repo org/repo 42 --json mergeStateStatus"
     assert_includes commands, "gh pr view --repo org/repo 42 --json headRefName,baseRefName"
   end
+
+  test "resolve_conflict_file strips markers and keeps both hunks" do
+    creator = Symphony::PullRequestCreator.new(repo: "org/repo", base_branch: "main")
+    Dir.mktmpdir do |workspace|
+      file = File.join(workspace, "conflicted.txt")
+      File.write(file, <<~TEXT)
+        before
+        <<<<<<< HEAD
+        from_head
+        =======
+        from_base
+        >>>>>>> origin/main
+        after
+      TEXT
+
+      creator.resolve_conflict_file(workspace, "conflicted.txt")
+
+      assert_equal <<~TEXT, File.read(file)
+        before
+        from_head
+        from_base
+        after
+      TEXT
+    end
+  end
 end

@@ -196,7 +196,9 @@ module Symphony
 
       # Remove conflict markers, keeping both versions
       # This is a simple resolution strategy - accept both changes
-      resolved = content.gsub(/<<<<<<<.*?=======\n/m, "").gsub(/>>>>>>>.*?\n/m, "")
+      resolved = content.gsub(/^<<<<<<<[^\n]*\n(.*?)^=======\n(.*?)^>>>>>>>[^\n]*\n?/m) do
+        "#{Regexp.last_match(1)}#{Regexp.last_match(2)}"
+      end
 
       File.write(file_path, resolved)
     end

@@ -52,17 +52,23 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
   end
 
   class FakeWorkspaceManager
-    attr_reader :handled_identifiers, :handled_branch_names
+    attr_reader :handled_identifiers, :handled_branch_names, :commit_calls
 
     def initialize
       @handled_identifiers = []
       @handled_branch_names = []
+      @commit_calls = []
     end
 
     def create_for_issue(identifier, branch_name: nil)
       @handled_identifiers << identifier
       @handled_branch_names << branch_name
       OpenStruct.new(path: "/tmp/#{identifier}")
+    end
+
+    def commit_changes(workspace_path, message)
+      @commit_calls << { workspace_path: workspace_path, message: message }
+      true
     end
   end
 
@@ -418,8 +424,69 @@ class Symphony::OrchestratorTest < ActiveSupport::TestCase
     assert_equal [ { id: "1", body: "GitHub PR merged successfully: https://github.com/org/repo/pull/7" } ], tracker.comments
     assert_equal [ "1" ], tracker.done_ids
     assert_equal [], tracker.not_now_ids
-    assert_equal [ { pr_url: "https://github.com/org/repo/pull/7", workspace_path: Rails.root } ], pull_request_creator.merge_calls
+    assert_equal [ { pr_url: "https://github.com/org/repo/pull/7", workspace_path: "/tmp/CARD-1" } ], pull_request_creator.merge_calls
     assert logger.infos.any? { |message| message.include?("merged PR for CARD-1") }
+  end
+
+  test "keeps issue claimed across turns until the multi-turn thread finishes" do
+    issue = Symphony::Issue.new(id: "1", identifier: "CARD-1", state: "active")
+    tracker = FakeTrackerClient.new([ issue ])
+    workspace_manager = FakeWorkspaceManager.new
+    turn_count = { value: 0 }
+    turn_count_mutex = Mutex.new
+    allow_second_turn_to_finish = Queue.new
+    wait_duration = nil
+
+    runner = Class.new do
+      define_method(:initialize) { |turn_count, turn_count_mutex, gate| @turn_count = turn_count; @turn_count_mutex = turn_count_mutex; @gate = gate }
+
+      define_method(:run) do |issue:, prompt:, workspace_path:|
+        turn_number = @turn_count_mutex.synchronize do
+          @turn_count[:value] += 1
+        end
+
+        case turn_number
+        when 1
+          OpenStruct.new(success: true, summary: OpenStruct.new(continue: true), stdout: "turn one output")
+        when 2
+          @gate.pop
+          OpenStruct.new(success: true, summary: OpenStruct.new(continue: false), stdout: "turn two output")
+        else
+          raise "unexpected extra turn"
+        end
+      end
+    end.new(turn_count, turn_count_mutex, allow_second_turn_to_finish)
+
+    orchestrator = Symphony::Orchestrator.new(
+      config: OpenStruct.new(max_concurrent_agents: 1, max_turns: 5),
+      workflow_loader: FakeWorkflowLoader.new,
+      tracker_client: tracker,
+      workspace_manager: workspace_manager,
+      agent_runner: runner,
+      pull_request_creator: FakePullRequestCreator.new(result: OpenStruct.new(success: false, error: "No changes produced in workspace")),
+      logger: TestLogger.new
+    )
+
+    orchestrator.tick
+    wait_until { turn_count_mutex.synchronize { turn_count[:value] } == 2 }
+
+    waiter = Thread.new do
+      started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      orchestrator.wait_until_idle(timeout: 0.2)
+      wait_duration = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at
+    end
+
+    sleep 0.05
+    assert_nil waiter.join(0), "wait_until_idle should not return while next turn is still running"
+
+    allow_second_turn_to_finish << true
+    waiter.join
+
+    assert_operator wait_duration, :>=, 0.2
+    assert_equal 2, turn_count_mutex.synchronize { turn_count[:value] }
+    assert_equal [ { workspace_path: "/tmp/CARD-1", message: "Turn 1 completed - CARD-1" } ], workspace_manager.commit_calls
+    assert_equal [ "1" ], tracker.in_progress_ids
+    assert_equal [ "1" ], tracker.transitioned_ids
   end
 
   test "moves merging issues to review and comments on merge failure" do
