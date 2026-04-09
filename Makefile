@@ -1,4 +1,4 @@
-.PHONY: deploy-all deploy-web deploy-symphony deploy-sym restart-sym restart-all clean-symphony-workspaces workflows
+.PHONY: deploy-all deploy-web deploy-symphony deploy-sym deploy-symfizzy restart-sym restart-symfizzy restart-all clean-symphony-workspaces workflows
 
 DEPLOY_HOST ?= nexus.majdan.online
 APP_CONTAINERS_CMD = docker ps -aq --filter label=service=fizzy --filter label=destination=
@@ -16,8 +16,14 @@ deploy-symphony:
 
 deploy-sym: deploy-symphony
 
+deploy-symfizzy:
+	bin/kamal deploy -r symfizzy
+
 restart-sym:
 	bin/kamal app boot -r symphony
+
+restart-symfizzy:
+	bin/kamal app boot -r symfizzy
 
 restart-all:
 	ssh $(DEPLOY_HOST) 'containers=$$($(APP_CONTAINERS_CMD)); if [ -n "$$containers" ]; then docker rm -f $$containers; fi'
